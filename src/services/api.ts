@@ -207,6 +207,17 @@ export const api = {
     return data as { success: boolean; token: string; client: Client };
   },
 
+  async resetClientAccessCode(clientId: string) {
+    const headers = await getHeaders();
+    const res = await fetch(`/api/clients/${clientId}/reset-code`, {
+      method: 'POST',
+      headers,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to reset client access code');
+    return data as { success: boolean; clientAccessCode: string; client: Client };
+  },
+
   // Insights / Performance Stats
   async getInsights(clientId: string = 'all', dateRange: string = '30d') {
     const headers = await getHeaders();

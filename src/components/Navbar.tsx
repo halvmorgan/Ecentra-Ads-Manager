@@ -34,6 +34,8 @@ interface NavbarProps {
   session: UserSession | null;
   onOpenLogin: () => void;
   onLogout: () => void;
+  isDbPermanent?: boolean;
+  lastSaveError?: string | null;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -54,18 +56,41 @@ export const Navbar: React.FC<NavbarProps> = ({
   session,
   onOpenLogin,
   onLogout,
+  isDbPermanent = true,
+  lastSaveError,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs">
       {/* Top Banner / Utility Bar */}
-      <div className="bg-slate-900 text-slate-300 px-4 sm:px-6 py-1.5 text-xs flex flex-wrap items-center justify-between border-b border-slate-800">
+      <div className="bg-slate-900 text-slate-300 px-4 sm:px-6 py-1.5 text-xs flex flex-wrap items-center justify-between border-b border-slate-800 gap-2">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5 font-medium text-amber-400">
             <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>
             <span>Ecentra Concierge Ad Engine</span>
           </div>
-          <span className="text-slate-600">|</span>
-          <span className="text-slate-400 hidden sm:inline">Meta Marketing API v21.0 & GHL Integration</span>
+          <span className="text-slate-600 hidden sm:inline">|</span>
+          <span className="text-slate-400 hidden lg:inline">Meta Marketing API v21.0 & GHL Integration</span>
+          
+          {/* Database Connectivity Badge in Admin Header */}
+          <div className="flex items-center">
+            {isDbPermanent ? (
+              <span
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                title="Cloud Firestore real-time storage is active and verified saving."
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                <span>Database: connected</span>
+              </span>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                title={lastSaveError || 'Database writes are currently not persisting to Cloud Firestore.'}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping"></span>
+                <span>Database: NOT saving</span>
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex items-center gap-3">

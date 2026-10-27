@@ -36,11 +36,11 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Client login state
+  const firstClient = clients.find(c => !c.isOwnBusiness);
   const [selectedClientId, setSelectedClientId] = useState<string>(
-    clients.find(c => !c.isOwnBusiness)?.id || clients[0]?.id || ''
+    firstClient?.id || clients[0]?.id || ''
   );
-  const [clientPin, setClientPin] = useState<string>('LUMINA-99');
+  const [clientPin, setClientPin] = useState<string>(firstClient?.clientAccessCode || 'LUMINA88');
   const [isCheckingPin, setIsCheckingPin] = useState(false);
 
   if (!isOpen) return null;
@@ -86,13 +86,12 @@ export const LoginModal: React.FC<LoginModalProps> = ({
     }
   };
 
-  // Pre-fill demo PIN on client select
+  // Pre-fill access code on client select
   const handleClientSelect = (id: string) => {
     setSelectedClientId(id);
     const client = clients.find(c => c.id === id);
     if (client) {
-      const pin = client.clientAccessCode || `${client.businessName.split(' ')[0].toUpperCase()}-${client.id.slice(-2)}`;
-      setClientPin(pin);
+      setClientPin(client.clientAccessCode || '');
     }
   };
 
@@ -232,7 +231,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   type="text"
                   value={clientPin}
                   onChange={(e) => setClientPin(e.target.value)}
-                  placeholder="e.g. LUMINA-99"
+                  placeholder="e.g. LUMINA88"
                   className="w-full text-xs font-mono font-bold tracking-wider uppercase border border-slate-300 rounded-lg p-2.5 bg-slate-50 text-slate-900"
                   required
                 />

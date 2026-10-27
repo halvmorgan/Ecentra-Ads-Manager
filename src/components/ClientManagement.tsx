@@ -18,7 +18,11 @@ import {
   Instagram,
   FileText,
   Sparkles,
-  AlertCircle
+  AlertCircle,
+  KeyRound,
+  Copy,
+  RotateCcw,
+  Check
 } from 'lucide-react';
 import { Client, NicheType } from '../types';
 import { api } from '../services/api';
@@ -41,6 +45,31 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [testLeadModalClient, setTestLeadModalClient] = useState<Client | null>(null);
   const [testLeadFeedback, setTestLeadFeedback] = useState<string | null>(null);
   const [isTestingLead, setIsTestingLead] = useState(false);
+  const [copiedClientId, setCopiedClientId] = useState<string | null>(null);
+  const [resettingClientId, setResettingClientId] = useState<string | null>(null);
+
+  const handleCopyAccessCode = (client: Client) => {
+    if (!client.clientAccessCode) return;
+    navigator.clipboard.writeText(client.clientAccessCode);
+    setCopiedClientId(client.id);
+    setTimeout(() => setCopiedClientId(null), 2000);
+  };
+
+  const handleResetAccessCode = async (client: Client) => {
+    if (!confirm(`Generate a new 8-character access code for ${client.businessName}? The old code will stop working immediately.`)) {
+      return;
+    }
+    setResettingClientId(client.id);
+    try {
+      const res = await api.resetClientAccessCode(client.id);
+      onRefreshClients();
+      setTestLeadFeedback(`Generated new access code for ${client.businessName}: ${res.clientAccessCode}`);
+    } catch (err: any) {
+      alert(err.message || 'Failed to reset access code');
+    } finally {
+      setResettingClientId(null);
+    }
+  };
 
   // Form State
   const [businessName, setBusinessName] = useState('');
@@ -311,6 +340,56 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                   </span>
                 </div>
               </div>
+
+              {/* Client Portal Access Code (Random 8-char code) */}
+              {!client.isOwnBusiness ? (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 mb-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider flex items-center gap-1">
+                      <KeyRound className="w-3 h-3 text-amber-600" />
+                      Client Portal Access Code
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-medium">8-char PIN</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-bold text-slate-900 tracking-wider text-xs bg-white px-2.5 py-1 rounded border border-slate-200 shadow-2xs">
+                      {client.clientAccessCode || 'NOT SET'}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => handleCopyAccessCode(client)}
+                        className="px-2 py-1 text-[11px] font-semibold text-slate-700 bg-white hover:bg-slate-100 rounded border border-slate-200 shadow-2xs flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Copy access code to clipboard"
+                      >
+                        {copiedClientId === client.id ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-600" />
+                            <span className="text-emerald-700 text-[10px]">Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-slate-500" />
+                            <span className="text-[10px]">Copy</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => handleResetAccessCode(client)}
+                        disabled={resettingClientId === client.id}
+                        className="px-2 py-1 text-[11px] font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 rounded border border-amber-200 shadow-2xs flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Regenerate a new 8-character access code"
+                      >
+                        <RotateCcw className={`w-3 h-3 text-amber-700 ${resettingClientId === client.id ? 'animate-spin' : ''}`} />
+                        <span className="text-[10px]">Reset</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-amber-50/70 border border-amber-200/80 rounded-lg p-2 text-center mb-3">
+                  <span className="text-[11px] font-semibold text-amber-900">Internal Agency Business — No Client Portal</span>
+                </div>
+              )}
 
               {/* Budget & Target CPL Pill */}
               <div className="grid grid-cols-2 gap-2 text-center bg-slate-900 text-white p-2.5 rounded-lg">

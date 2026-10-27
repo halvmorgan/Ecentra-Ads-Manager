@@ -53,6 +53,7 @@ export default function App() {
   const [budgetModal, setBudgetModal] = useState<{ clientId: string; adId: string; currentBudget: number } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
+  const [isDbPermanent, setIsDbPermanent] = useState<boolean>(true);
 
   // Monitor Firebase Auth State (Harold Google Sign-In)
   useEffect(() => {
@@ -112,6 +113,7 @@ export default function App() {
       setAdStats(insightsRes.adStats);
       setAttentionItems(insightsRes.attentionItems);
       setLeads(leadsRes);
+      setIsDbPermanent(Boolean(statusRes.isDbPermanent));
       if ((statusRes as any).lastSaveError) {
         setStorageError((statusRes as any).lastSaveError);
       } else {
@@ -289,6 +291,8 @@ export default function App() {
         session={session}
         onOpenLogin={() => setIsLoginModalOpen(true)}
         onLogout={handleLogout}
+        isDbPermanent={isDbPermanent}
+        lastSaveError={storageError}
       />
 
       {/* Storage Alert Banner (Requirement 3: Visible error in dashboard if a save fails) */}

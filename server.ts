@@ -4,9 +4,10 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import admin from 'firebase-admin';
+import { initializeApp, getApps, applicationDefault, App } from 'firebase-admin/app';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import { getAuth } from 'firebase-admin/auth';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -41,7 +42,7 @@ if (geminiApiKey) {
 // ==========================================
 // FIREBASE ADMIN & CLOUD FIRESTORE STORAGE
 // ==========================================
-let adminApp: admin.app.App | null = null;
+let adminApp: App | null = null;
 let firestoreDb: Firestore | null = null;
 let lastSaveError: string | null = null;
 
@@ -49,12 +50,20 @@ try {
   const cfgPath = path.resolve(__dirname, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
     const fbConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    if (!admin.apps.length) {
-      adminApp = admin.initializeApp({
-        projectId: fbConfig.projectId,
-      });
+    if (!getApps().length) {
+      try {
+        adminApp = initializeApp({
+          projectId: fbConfig.projectId,
+          credential: applicationDefault(),
+        });
+      } catch (credErr: any) {
+        console.warn('[Firestore Admin] Default credential notice, fallback to projectId init:', credErr.message);
+        adminApp = initializeApp({
+          projectId: fbConfig.projectId,
+        });
+      }
     } else {
-      adminApp = admin.apps[0]!;
+      adminApp = getApps()[0]!;
     }
     const dbId = fbConfig.firestoreDatabaseId && fbConfig.firestoreDatabaseId !== '(default)'
       ? fbConfig.firestoreDatabaseId
@@ -66,6 +75,33 @@ try {
   console.error('[Firestore Admin] Initialization warning:', e.message);
   lastSaveError = `Firestore Init Warning: ${e.message}`;
 }
+
+function generateAccessCode(): string {
+  return crypto.randomBytes(4).toString('hex').toUpperCase();
+}
+
+function sanitizeClient(client: any) {
+  if (!client) return client;
+  const clone = { ...client };
+  if (clone.ghlConfig) {
+    const { apiKey, ...safeGhl } = clone.ghlConfig;
+    clone.ghlConfig = {
+      ...safeGhl,
+      apiKeyMasked: safeGhl.apiKeyMasked || (apiKey ? 'ghl_live_••••••••' + apiKey.slice(-4) : ''),
+      hasApiKey: Boolean(safeGhl.hasApiKey || apiKey),
+      syncEnabled: safeGhl.syncEnabled !== false,
+    };
+  }
+  return clone;
+}
+
+interface ClientSessionRecord {
+  token: string;
+  clientId: string;
+  createdAt: string;
+}
+
+const memoryClientSessions = new Map<string, ClientSessionRecord>();
 
 interface StoreData {
   metaConfig: {
@@ -110,6 +146,7 @@ const defaultSeedData: StoreData = {
         radiusMiles: 15,
       },
       phone: '(480) 555-0192',
+      clientAccessCode: 'LUMINA88',
       ghlConfig: {
         locationId: 'loc_lumina_9921',
         apiKeyMasked: 'ghl_live_••••••••38f1',
@@ -143,6 +180,7 @@ const defaultSeedData: StoreData = {
         radiusMiles: 25,
       },
       phone: '(813) 555-0144',
+      clientAccessCode: 'APEX9921',
       ghlConfig: {
         locationId: 'loc_apex_4418',
         apiKeyMasked: 'ghl_live_••••••••811a',
@@ -176,6 +214,7 @@ const defaultSeedData: StoreData = {
         radiusMiles: 30,
       },
       phone: '(720) 555-0188',
+      clientAccessCode: 'SOLAR310',
       ghlConfig: {
         locationId: 'loc_solaria_3120',
         apiKeyMasked: 'ghl_live_••••••••65d2',
@@ -660,6 +699,18 @@ async function syncFromFirestore(): Promise<void> {
         leadsSnap.forEach(d => leads.push(d.data()));
         store.leads = leads;
       }
+
+      // Ensure every non-own client has a random 8-character access code
+      let needsResync = false;
+      for (const c of store.clients) {
+        if (!c.isOwnBusiness && (!c.clientAccessCode || c.clientAccessCode.length < 8)) {
+          c.clientAccessCode = generateAccessCode();
+          needsResync = true;
+        }
+      }
+      if (needsResync) {
+        await syncToFirestore();
+      }
     } else {
       console.log('[Firestore Admin] Firestore is empty. Initializing with default seed records...');
       await syncToFirestore();
@@ -673,6 +724,25 @@ async function syncFromFirestore(): Promise<void> {
 
 function persist() {
   syncToFirestore();
+}
+
+// Real database read/write health check: reports true ONLY when write and read succeed
+async function checkFirestoreHealth(): Promise<{ isHealthy: boolean; error?: string }> {
+  if (!firestoreDb) {
+    return { isHealthy: false, error: 'Cloud Firestore database not initialized' };
+  }
+  try {
+    const pingDoc = firestoreDb.collection('system').doc('health_check');
+    const now = new Date().toISOString();
+    await pingDoc.set({ lastPing: now, source: 'connection_check' }, { merge: true });
+    const snap = await pingDoc.get();
+    if (snap.exists && snap.data()?.lastPing === now) {
+      return { isHealthy: true };
+    }
+    return { isHealthy: false, error: 'Database readback check did not match written timestamp' };
+  } catch (err: any) {
+    return { isHealthy: false, error: err.message };
+  }
 }
 
 // ==========================================
@@ -738,20 +808,38 @@ async function requireClientOrAdmin(req: Request, res: Response, next: Function)
     }
   }
 
-  // 2. Try Client Access Token
-  if (clientToken && clientToken.startsWith('client_auth_')) {
-    const clientId = clientToken.replace('client_auth_', '').trim();
-    const client = store.clients.find(c => c.id === clientId);
-    if (client) {
-      (req as any).isClient = true;
-      (req as any).client = client;
-      (req as any).clientId = clientId;
-      return next();
+  // 2. Try Random Client Session Token (Stored in memory and Firestore)
+  if (clientToken && typeof clientToken === 'string') {
+    const trimmedToken = clientToken.trim();
+    let session = memoryClientSessions.get(trimmedToken);
+
+    if (!session && firestoreDb) {
+      try {
+        const snap = await firestoreDb.collection('client_sessions').doc(trimmedToken).get();
+        if (snap.exists) {
+          session = snap.data() as ClientSessionRecord;
+          if (session) {
+            memoryClientSessions.set(trimmedToken, session);
+          }
+        }
+      } catch (err: any) {
+        console.warn('[Firestore] Session verification error:', err.message);
+      }
+    }
+
+    if (session) {
+      const client = store.clients.find(c => c.id === session!.clientId);
+      if (client) {
+        (req as any).isClient = true;
+        (req as any).client = sanitizeClient(client);
+        (req as any).clientId = session.clientId;
+        return next();
+      }
     }
   }
 
   return res.status(401).json({
-    error: 'Authentication required. Sign in with Google (halvmorgan@gmail.com) or enter your Client Access PIN.',
+    error: 'Authentication required. Sign in with Google (halvmorgan@gmail.com) or enter your 8-character Client Access Code.',
   });
 }
 
@@ -1045,8 +1133,12 @@ setInterval(syncAllLiveLeads, 15 * 60 * 1000);
 // API ROUTES
 // ==========================================
 
-// Server & Database Status
-app.get('/api/status', (req: Request, res: Response) => {
+// Server & Database Status (reports isDbPermanent true ONLY when a real Firestore write and read just succeeded)
+app.get('/api/status', async (req: Request, res: Response) => {
+  const health = await checkFirestoreHealth();
+  const isDbPermanent = health.isHealthy;
+  const currentError = isDbPermanent ? null : (health.error || lastSaveError);
+
   res.json({
     hasToken: store.metaConfig.hasToken,
     tokenMasked: store.metaConfig.tokenMasked,
@@ -1058,9 +1150,9 @@ app.get('/api/status', (req: Request, res: Response) => {
     activeCampaignsCount: store.campaigns.filter(c => c.status === 'ACTIVE').length,
     activeAdsCount: store.ads.filter(a => a.status === 'ACTIVE').length,
     hasGeminiKey: Boolean(geminiApiKey),
-    isDbPermanent: true,
+    isDbPermanent,
     isFirestoreActive: Boolean(firestoreDb),
-    lastSaveError: lastSaveError,
+    lastSaveError: currentError,
     lastCacheRefresh: store.metaConfig.lastCacheRefresh || new Date().toISOString(),
   });
 });
@@ -1209,8 +1301,8 @@ app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Re
   res.json({ locations: filtered });
 });
 
-// Client Portal Read-Only PIN Authentication
-app.post('/api/clients/portal-auth', (req: Request, res: Response) => {
+// Client Portal Read-Only Authentication (Random 8-char code + Random Session Token)
+app.post('/api/clients/portal-auth', async (req: Request, res: Response) => {
   const { clientId, pin } = req.body;
   const client = store.clients.find(c => c.id === clientId);
   if (!client) {
@@ -1220,16 +1312,68 @@ app.post('/api/clients/portal-auth', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'This is an internal agency asset without a separate client portal.' });
   }
 
-  const expected = client.clientAccessCode || `${client.businessName.split(' ')[0].toUpperCase()}-${client.id.slice(-2)}`;
-  if (pin && (pin.trim().toUpperCase() === expected.toUpperCase() || pin.trim() === '1234')) {
-    return res.json({
-      success: true,
-      token: `client_auth_${client.id}`,
-      client,
-    });
+  const expected = (client.clientAccessCode || '').trim().toUpperCase();
+  const inputPin = (pin || '').trim().toUpperCase();
+
+  // STRICT: Exact match required, no '1234' master PIN bypass, no short fallback
+  if (!expected || inputPin !== expected) {
+    return res.status(401).json({ error: 'Invalid client access code. Check the 8-character code assigned by Harold.' });
   }
 
-  return res.status(401).json({ error: 'Invalid client access code' });
+  // Issue cryptographically random session token (stored in Firestore and memory)
+  const sessionToken = crypto.randomBytes(24).toString('hex');
+  const sessionRecord: ClientSessionRecord = {
+    token: sessionToken,
+    clientId: client.id,
+    createdAt: new Date().toISOString(),
+  };
+
+  memoryClientSessions.set(sessionToken, sessionRecord);
+
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('client_sessions').doc(sessionToken).set(sessionRecord);
+    } catch (e: any) {
+      console.warn('[Firestore] Note saving client session:', e.message);
+    }
+  }
+
+  return res.json({
+    success: true,
+    token: sessionToken,
+    client: sanitizeClient(client),
+  });
+});
+
+// Reset / Regenerate Client Access Code (ADMIN PROTECTED)
+app.post('/api/clients/:id/reset-code', requireAdmin, async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const client = store.clients.find(c => c.id === id);
+  if (!client) {
+    return res.status(404).json({ error: 'Client not found' });
+  }
+  if (client.isOwnBusiness) {
+    return res.status(400).json({ error: 'Internal agency businesses do not have a client portal access code.' });
+  }
+
+  const newCode = generateAccessCode();
+  client.clientAccessCode = newCode;
+
+  if (firestoreDb) {
+    try {
+      await firestoreDb.collection('clients').doc(id).set({ clientAccessCode: newCode }, { merge: true });
+    } catch (err: any) {
+      console.warn('[Firestore] Error persisting reset access code:', err.message);
+    }
+  }
+
+  persist();
+
+  res.json({
+    success: true,
+    clientAccessCode: newCode,
+    client: sanitizeClient(client),
+  });
 });
 
 // TEST CONNECTION (Requirement 7: Diagnostic Line-by-Line) (ADMIN PROTECTED)
@@ -1519,9 +1663,9 @@ app.get('/api/meta/resources', requireAdmin, async (req: Request, res: Response)
 app.get('/api/clients', requireClientOrAdmin, (req: Request, res: Response) => {
   if ((req as any).isClient) {
     const client = (req as any).client;
-    return res.json(client ? [client] : []);
+    return res.json(client ? [sanitizeClient(client)] : []);
   }
-  res.json(store.clients);
+  res.json(store.clients.map(sanitizeClient));
 });
 
 // Get Single Client (Read-only isolated for clients, full for admin)
@@ -1533,7 +1677,7 @@ app.get('/api/clients/:id', requireClientOrAdmin, (req: Request, res: Response) 
 
   const client = store.clients.find(c => c.id === id);
   if (!client) return res.status(404).json({ error: 'Client not found' });
-  res.json(client);
+  res.json(sanitizeClient(client));
 });
 
 // Create or Upsert Client (ADMIN PROTECTED - Requirement 2)
@@ -1550,7 +1694,7 @@ app.post('/api/clients', requireAdmin, (req: Request, res: Response) => {
       ...clientData,
     };
     persist();
-    return res.json(store.clients[existingIndex]);
+    return res.json(sanitizeClient(store.clients[existingIndex]));
   }
 
   const newClient = {
@@ -1559,6 +1703,9 @@ app.post('/api/clients', requireAdmin, (req: Request, res: Response) => {
     monthlyBudget: Number(clientData.monthlyBudget) || 2000,
     targetCpl: Number(clientData.targetCpl) || 30.00,
     weeklyReportEnabled: clientData.weeklyReportEnabled !== false,
+    clientAccessCode: !clientData.isOwnBusiness 
+      ? (clientData.clientAccessCode && clientData.clientAccessCode.length >= 8 ? clientData.clientAccessCode : generateAccessCode())
+      : undefined,
     ghlConfig: {
       locationId: clientData.ghlConfig?.locationId || '',
       apiKeyMasked: clientData.ghlConfig?.apiKey ? 'ghl_live_••••••••' + clientData.ghlConfig.apiKey.slice(-4) : '',
@@ -1577,7 +1724,7 @@ app.post('/api/clients', requireAdmin, (req: Request, res: Response) => {
 
   store.clients.push(newClient);
   persist();
-  res.status(201).json(newClient);
+  res.status(201).json(sanitizeClient(newClient));
 });
 
 // Update Client (ADMIN PROTECTED - Requirement 2)
@@ -1589,13 +1736,23 @@ app.put('/api/clients/:id', requireAdmin, (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Client not found' });
   }
 
+  const existingGhlApiKey = store.clients[existingIndex].ghlConfig?.apiKey;
+  const newGhlApiKey = clientData.ghlConfig?.apiKey || existingGhlApiKey;
+
   store.clients[existingIndex] = {
     ...store.clients[existingIndex],
     ...clientData,
     id, // ensure ID is preserved
+    ghlConfig: {
+      ...store.clients[existingIndex].ghlConfig,
+      ...clientData.ghlConfig,
+      apiKey: newGhlApiKey,
+      apiKeyMasked: newGhlApiKey ? 'ghl_live_••••••••' + newGhlApiKey.slice(-4) : '',
+      hasApiKey: Boolean(newGhlApiKey),
+    },
   };
   persist();
-  res.json(store.clients[existingIndex]);
+  res.json(sanitizeClient(store.clients[existingIndex]));
 });
 
 // Delete Client (ADMIN PROTECTED - Requirement 2)

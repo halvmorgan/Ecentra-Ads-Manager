@@ -20,6 +20,11 @@ service cloud.firestore {
       allow read, write: if isAdmin();
     }
 
+    // Client session tokens
+    match /client_sessions/{sessionId} {
+      allow read, write: if true;
+    }
+
     // Clients & agency internal businesses
     match /clients/{clientId} {
       allow read: if isSignedIn();
