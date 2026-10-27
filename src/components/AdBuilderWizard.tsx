@@ -257,6 +257,19 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   // Launch Campaign (ALWAYS CREATED PAUSED FIRST PER SPEC)
   const handleLaunchCampaign = async () => {
     if (!activeClient) return;
+
+    // Requirement 4: Block launch if no location is selected
+    const hasLocation = Boolean(
+      (selectedLocation?.key && String(selectedLocation.key).trim()) ||
+      (city && String(city).trim()) ||
+      (selectedLocation?.latitude && selectedLocation?.longitude)
+    );
+
+    if (!hasLocation) {
+      setLaunchError('Pick a location first.');
+      return;
+    }
+
     setIsLaunching(true);
     setLaunchError(null);
     try {
@@ -965,17 +978,31 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                       type="button"
                       onClick={() => {
                         setSelectedLocation(null);
-                        setCity(activeClient.serviceArea.city);
+                        setCity('');
                       }}
-                      className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold"
+                      className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer"
                     >
                       Clear
                     </button>
                   </div>
+                ) : (city && city.trim()) ? (
+                  <div className="p-2.5 rounded-lg bg-emerald-50/60 border border-emerald-200 text-[11px] text-emerald-800 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Targeting client service area: <strong>{city}</strong></span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCity('')}
+                      className="text-[10px] text-emerald-700 hover:text-emerald-950 font-bold cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
                 ) : (
-                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                    <span>Defaulting to client city: <strong>{city || activeClient?.serviceArea.city}</strong></span>
+                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 font-semibold flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Pick a location first before launching this ad campaign.</span>
                   </div>
                 )}
               </div>

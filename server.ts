@@ -4,16 +4,9 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { initializeApp, getApps } from 'firebase/app';
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  collection, 
-  getDocs, 
-  deleteDoc 
-} from 'firebase/firestore';
+import admin from 'firebase-admin';
+import { getFirestore, Firestore } from 'firebase-admin/firestore';
+import { getAuth } from 'firebase-admin/auth';
 
 dotenv.config();
 
@@ -46,27 +39,32 @@ if (geminiApiKey) {
 }
 
 // ==========================================
-// CLOUD FIRESTORE PERMANENT STORAGE
+// FIREBASE ADMIN & CLOUD FIRESTORE STORAGE
 // ==========================================
-let firestoreDb: any = null;
-let fbConfig: any = null;
+let adminApp: admin.app.App | null = null;
+let firestoreDb: Firestore | null = null;
+let lastSaveError: string | null = null;
+
 try {
   const cfgPath = path.resolve(__dirname, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
-    fbConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(fbConfig, 'ecentra-server');
-    firestoreDb = getFirestore(fbApp, fbConfig.firestoreDatabaseId);
-    console.log('[Firestore] Connected to Cloud Firestore database:', fbConfig.firestoreDatabaseId);
+    const fbConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    if (!admin.apps.length) {
+      adminApp = admin.initializeApp({
+        projectId: fbConfig.projectId,
+      });
+    } else {
+      adminApp = admin.apps[0]!;
+    }
+    const dbId = fbConfig.firestoreDatabaseId && fbConfig.firestoreDatabaseId !== '(default)'
+      ? fbConfig.firestoreDatabaseId
+      : undefined;
+    firestoreDb = dbId ? getFirestore(adminApp, dbId) : getFirestore(adminApp);
+    console.log('[Firestore Admin] Connected to Cloud Firestore database:', dbId || '(default)');
   }
 } catch (e: any) {
-  console.warn('[Firestore] Initialization note:', e.message);
-}
-
-const DATA_DIR = path.resolve(__dirname, 'data');
-const DB_FILE = path.resolve(DATA_DIR, 'ecentra_db.json');
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.error('[Firestore Admin] Initialization warning:', e.message);
+  lastSaveError = `Firestore Init Warning: ${e.message}`;
 }
 
 interface StoreData {
@@ -559,203 +557,201 @@ const defaultSeedData: StoreData = {
   ]
 };
 
-function loadDatabase(): StoreData {
-  try {
-    if (fs.existsSync(DB_FILE)) {
-      const raw = fs.readFileSync(DB_FILE, 'utf-8');
-      const parsed = JSON.parse(raw);
-      return {
-        ...defaultSeedData,
-        ...parsed,
-        metaConfig: {
-          ...defaultSeedData.metaConfig,
-          ...(parsed.metaConfig || {}),
-        },
-      };
-    }
-  } catch (err) {
-    console.error('Failed reading database file, initializing defaults:', err);
-  }
-  saveDatabase(defaultSeedData);
-  return defaultSeedData;
-}
+let store: StoreData = {
+  ...defaultSeedData,
+  metaConfig: { ...defaultSeedData.metaConfig },
+  clients: [...defaultSeedData.clients],
+  campaigns: [...defaultSeedData.campaigns],
+  adSets: [...defaultSeedData.adSets],
+  ads: [...defaultSeedData.ads],
+  leads: [...defaultSeedData.leads],
+};
 
-function saveDatabase(data: StoreData) {
-  try {
-    const tmp = `${DB_FILE}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-    fs.renameSync(tmp, DB_FILE);
-  } catch (err) {
-    console.error('Failed to atomically save local database backup:', err);
-  }
-}
-
-let store: StoreData = loadDatabase();
-
-// Sync all collections to Cloud Firestore asynchronously
-async function syncToFirestore() {
+// Sync all collections to Cloud Firestore using firebase-admin SDK
+async function syncToFirestore(): Promise<void> {
   if (!firestoreDb) return;
   try {
+    const batch = firestoreDb.batch();
+
     // 1. Meta Config
-    await setDoc(doc(firestoreDb, 'system', 'metaConfig'), {
+    const metaRef = firestoreDb.collection('system').doc('metaConfig');
+    batch.set(metaRef, {
       ...store.metaConfig,
       updatedAt: new Date().toISOString(),
-    });
+    }, { merge: true });
 
     // 2. Clients
     for (const c of store.clients) {
-      await setDoc(doc(firestoreDb, 'clients', c.id), c);
+      batch.set(firestoreDb.collection('clients').doc(c.id), c, { merge: true });
     }
 
     // 3. Campaigns
     for (const camp of store.campaigns) {
-      await setDoc(doc(firestoreDb, 'campaigns', camp.id), camp);
+      batch.set(firestoreDb.collection('campaigns').doc(camp.id), camp, { merge: true });
     }
 
     // 4. AdSets
     for (const as of store.adSets) {
-      await setDoc(doc(firestoreDb, 'adSets', as.id), as);
+      batch.set(firestoreDb.collection('adSets').doc(as.id), as, { merge: true });
     }
 
     // 5. Ads
     for (const ad of store.ads) {
-      await setDoc(doc(firestoreDb, 'ads', ad.id), ad);
+      batch.set(firestoreDb.collection('ads').doc(ad.id), ad, { merge: true });
     }
 
-    // 6. Leads
-    for (const l of store.leads) {
-      await setDoc(doc(firestoreDb, 'leads', l.id), l);
+    // 6. Leads (latest 200)
+    for (const l of store.leads.slice(0, 200)) {
+      batch.set(firestoreDb.collection('leads').doc(l.id), l, { merge: true });
     }
+
+    await batch.commit();
+    lastSaveError = null;
   } catch (err: any) {
-    console.warn('[Firestore] Sync error:', err.message);
+    console.error('[Firestore Admin Save Error]:', err.message);
+    lastSaveError = `Firestore Save Error: ${err.message}`;
   }
 }
 
 // Initial pull from Cloud Firestore on container boot
-async function syncFromFirestore() {
+async function syncFromFirestore(): Promise<void> {
   if (!firestoreDb) return;
   try {
-    console.log('[Firestore] Checking Cloud Firestore collections...');
-    const clientsSnap = await getDocs(collection(firestoreDb, 'clients'));
+    console.log('[Firestore Admin] Checking Cloud Firestore collections...');
+    const clientsSnap = await firestoreDb.collection('clients').get();
     if (!clientsSnap.empty) {
-      console.log(`[Firestore] Found ${clientsSnap.size} clients in Cloud Firestore. Hydrating memory cache...`);
+      console.log(`[Firestore Admin] Found ${clientsSnap.size} clients in Cloud Firestore. Hydrating memory cache...`);
       const loadedClients: any[] = [];
       clientsSnap.forEach(d => loadedClients.push(d.data()));
       store.clients = loadedClients;
 
-      const metaSnap = await getDoc(doc(firestoreDb, 'system', 'metaConfig'));
-      if (metaSnap.exists()) {
+      const metaDoc = await firestoreDb.collection('system').doc('metaConfig').get();
+      if (metaDoc.exists) {
         store.metaConfig = {
           ...store.metaConfig,
-          ...metaSnap.data(),
+          ...metaDoc.data(),
         };
       }
 
-      const campSnap = await getDocs(collection(firestoreDb, 'campaigns'));
+      const campSnap = await firestoreDb.collection('campaigns').get();
       if (!campSnap.empty) {
         const camps: any[] = [];
         campSnap.forEach(d => camps.push(d.data()));
         store.campaigns = camps;
       }
 
-      const adSetsSnap = await getDocs(collection(firestoreDb, 'adSets'));
+      const adSetsSnap = await firestoreDb.collection('adSets').get();
       if (!adSetsSnap.empty) {
         const adSets: any[] = [];
         adSetsSnap.forEach(d => adSets.push(d.data()));
         store.adSets = adSets;
       }
 
-      const adsSnap = await getDocs(collection(firestoreDb, 'ads'));
+      const adsSnap = await firestoreDb.collection('ads').get();
       if (!adsSnap.empty) {
         const ads: any[] = [];
         adsSnap.forEach(d => ads.push(d.data()));
         store.ads = ads;
       }
 
-      const leadsSnap = await getDocs(collection(firestoreDb, 'leads'));
+      const leadsSnap = await firestoreDb.collection('leads').get();
       if (!leadsSnap.empty) {
         const leads: any[] = [];
         leadsSnap.forEach(d => leads.push(d.data()));
         store.leads = leads;
       }
     } else {
-      console.log('[Firestore] Firestore is clean. Initializing with default seed records...');
+      console.log('[Firestore Admin] Firestore is empty. Initializing with default seed records...');
       await syncToFirestore();
     }
+    lastSaveError = null;
   } catch (err: any) {
-    console.warn('[Firestore] Note during startup pull:', err.message);
+    console.warn('[Firestore Admin] Note during startup pull:', err.message);
+    lastSaveError = `Firestore Load Note: ${err.message}`;
   }
 }
 
 function persist() {
-  saveDatabase(store);
   syncToFirestore();
 }
 
 // ==========================================
-// AUTHENTICATION & ACCESS CONTROL (Requirement 1)
+// AUTHENTICATION & ACCESS CONTROL (Requirement 1 & 2)
 // ==========================================
-function requireAdmin(req: Request, res: Response, next: Function) {
-  const authHeader = req.headers.authorization;
-  const clientToken = req.headers['x-client-access-token'] as string;
 
-  // Block client read-only tokens from accessing admin routes
-  if (clientToken && !authHeader) {
-    return res.status(403).json({
-      error: 'Access Denied: Read-only client accounts cannot configure Meta tokens, launch ads, or adjust budgets.',
+// Strict admin verification: only verified halvmorgan@gmail.com with Firebase ID token
+async function requireAdmin(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({
+      error: 'Unauthorized: Admin authentication required. Sign in with Google (halvmorgan@gmail.com).',
     });
   }
 
-  if (authHeader) {
-    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    // Parse JWT token payload if standard Firebase ID token
-    const parts = token.split('.');
-    if (parts.length === 3) {
-      try {
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
-        if (payload.email && payload.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
-          (req as any).user = payload;
-          return next();
-        } else {
-          return res.status(403).json({
-            error: `Access Denied: ${payload.email || 'User'} is not authorized. Only ${ADMIN_EMAIL} is the verified Ecentra Admin.`,
-          });
-        }
-      } catch (e) {
-        // Fallback
-      }
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+  if (!token) {
+    return res.status(401).json({
+      error: 'Unauthorized: Missing bearer token.',
+    });
+  }
+
+  try {
+    const auth = getAuth(adminApp || undefined);
+    const decodedToken = await auth.verifyIdToken(token);
+
+    if (!decodedToken.email_verified || decodedToken.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
+      return res.status(403).json({
+        error: `Forbidden: Access restricted to verified ${ADMIN_EMAIL}. Received: ${decodedToken.email || 'unknown'} (verified: ${decodedToken.email_verified})`,
+      });
     }
 
-    if (token === 'admin-session' || token === ADMIN_EMAIL || token === 'demo-admin') {
+    (req as any).user = decodedToken;
+    (req as any).isAdmin = true;
+    return next();
+  } catch (err: any) {
+    return res.status(401).json({
+      error: `Unauthorized: Invalid or expired Firebase ID token (${err.message}). Please sign in again.`,
+    });
+  }
+}
+
+// Client or Admin authentication middleware
+async function requireClientOrAdmin(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  const clientToken = req.headers['x-client-access-token'] as string;
+
+  // 1. Try Admin Bearer Token
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (token) {
+      try {
+        const auth = getAuth(adminApp || undefined);
+        const decodedToken = await auth.verifyIdToken(token);
+        if (decodedToken.email_verified && decodedToken.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+          (req as any).user = decodedToken;
+          (req as any).isAdmin = true;
+          return next();
+        }
+      } catch (e) {
+        // Not a valid admin token, will check client token below
+      }
+    }
+  }
+
+  // 2. Try Client Access Token
+  if (clientToken && clientToken.startsWith('client_auth_')) {
+    const clientId = clientToken.replace('client_auth_', '').trim();
+    const client = store.clients.find(c => c.id === clientId);
+    if (client) {
+      (req as any).isClient = true;
+      (req as any).client = client;
+      (req as any).clientId = clientId;
       return next();
     }
   }
 
-  // If in demo mode without connected live token, permit local dashboard browsing
-  if (!store.metaConfig.liveMode && !store.metaConfig.hasToken) {
-    return next();
-  }
-
   return res.status(401).json({
-    error: `Unauthorized: Admin authentication required. Sign in with Google (${ADMIN_EMAIL}) to access agency management.`,
-  });
-}
-
-function requireAuthOrClient(req: Request, res: Response, next: Function) {
-  const authHeader = req.headers.authorization;
-  const clientToken = req.headers['x-client-access-token'] as string;
-
-  if (clientToken || authHeader) {
-    return next();
-  }
-
-  // In demo mode default view
-  if (!store.metaConfig.liveMode && !store.metaConfig.hasToken) {
-    return next();
-  }
-
-  return res.status(401).json({
-    error: 'Authentication required. Please sign in as Harold (Admin) or enter your Client Access PIN.',
+    error: 'Authentication required. Sign in with Google (halvmorgan@gmail.com) or enter your Client Access PIN.',
   });
 }
 
@@ -1064,6 +1060,7 @@ app.get('/api/status', (req: Request, res: Response) => {
     hasGeminiKey: Boolean(geminiApiKey),
     isDbPermanent: true,
     isFirestoreActive: Boolean(firestoreDb),
+    lastSaveError: lastSaveError,
     lastCacheRefresh: store.metaConfig.lastCacheRefresh || new Date().toISOString(),
   });
 });
@@ -1138,8 +1135,8 @@ app.post('/api/settings/toggle-demo', requireAdmin, (req: Request, res: Response
   });
 });
 
-// Location Search via Meta Targeting Search API (Requirement 5)
-app.get('/api/meta/search-locations', async (req: Request, res: Response) => {
+// Location Search via Meta Targeting Search API (ADMIN PROTECTED - Requirement 2 & 5)
+app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Response) => {
   const query = (req.query.q as string || '').trim();
   if (!query) {
     return res.json({ locations: [] });
@@ -1442,8 +1439,8 @@ app.post('/api/meta/test-connection', requireAdmin, async (req: Request, res: Re
   });
 });
 
-// Reachable Resources
-app.get('/api/meta/resources', async (req: Request, res: Response) => {
+// Reachable Resources (ADMIN PROTECTED - Requirement 2)
+app.get('/api/meta/resources', requireAdmin, async (req: Request, res: Response) => {
   if (store.metaConfig.liveMode && store.metaConfig.token) {
     try {
       const token = store.metaConfig.token;
@@ -1518,12 +1515,29 @@ app.get('/api/meta/resources', async (req: Request, res: Response) => {
   });
 });
 
-// Clients CRUD (Saved Permanently)
-app.get('/api/clients', (req: Request, res: Response) => {
+// Clients List (Read-only isolated for clients, full for admin)
+app.get('/api/clients', requireClientOrAdmin, (req: Request, res: Response) => {
+  if ((req as any).isClient) {
+    const client = (req as any).client;
+    return res.json(client ? [client] : []);
+  }
   res.json(store.clients);
 });
 
-app.post('/api/clients', (req: Request, res: Response) => {
+// Get Single Client (Read-only isolated for clients, full for admin)
+app.get('/api/clients/:id', requireClientOrAdmin, (req: Request, res: Response) => {
+  const { id } = req.params;
+  if ((req as any).isClient && (req as any).clientId !== id) {
+    return res.status(403).json({ error: 'Forbidden: Access restricted to your own client account only.' });
+  }
+
+  const client = store.clients.find(c => c.id === id);
+  if (!client) return res.status(404).json({ error: 'Client not found' });
+  res.json(client);
+});
+
+// Create or Upsert Client (ADMIN PROTECTED - Requirement 2)
+app.post('/api/clients', requireAdmin, (req: Request, res: Response) => {
   const clientData = req.body;
   if (!clientData.businessName || !clientData.niche) {
     return res.status(400).json({ error: 'Business name and niche are required' });
@@ -1566,28 +1580,60 @@ app.post('/api/clients', (req: Request, res: Response) => {
   res.status(201).json(newClient);
 });
 
-app.delete('/api/clients/:id', (req: Request, res: Response) => {
+// Update Client (ADMIN PROTECTED - Requirement 2)
+app.put('/api/clients/:id', requireAdmin, (req: Request, res: Response) => {
+  const { id } = req.params;
+  const clientData = req.body;
+  const existingIndex = store.clients.findIndex(c => c.id === id);
+  if (existingIndex < 0) {
+    return res.status(404).json({ error: 'Client not found' });
+  }
+
+  store.clients[existingIndex] = {
+    ...store.clients[existingIndex],
+    ...clientData,
+    id, // ensure ID is preserved
+  };
+  persist();
+  res.json(store.clients[existingIndex]);
+});
+
+// Delete Client (ADMIN PROTECTED - Requirement 2)
+app.delete('/api/clients/:id', requireAdmin, (req: Request, res: Response) => {
   const id = req.params.id;
   store.clients = store.clients.filter(c => c.id !== id);
   store.campaigns = store.campaigns.filter(c => c.clientId !== id);
   store.adSets = store.adSets.filter(a => a.clientId !== id);
   store.ads = store.ads.filter(a => a.clientId !== id);
+
+  if (firestoreDb) {
+    firestoreDb.collection('clients').doc(id).delete().catch(err => {
+      console.error('[Firestore Admin] Delete client error:', err.message);
+      lastSaveError = `Delete client error: ${err.message}`;
+    });
+  }
+
   persist();
   res.json({ success: true });
 });
 
-// Campaigns & Ads List
-app.get('/api/campaigns', (req: Request, res: Response) => {
-  const clientId = req.query.clientId as string | undefined;
+// Campaigns & Ads List (Tenant isolated: client only sees own campaigns)
+app.get('/api/campaigns', requireClientOrAdmin, (req: Request, res: Response) => {
+  let effectiveClientId = req.query.clientId as string | undefined;
+
+  // Strict client tenant isolation
+  if ((req as any).isClient) {
+    effectiveClientId = (req as any).clientId;
+  }
 
   let campaigns = store.campaigns;
   let adSets = store.adSets;
   let ads = store.ads;
 
-  if (clientId && clientId !== 'all') {
-    campaigns = campaigns.filter(c => c.clientId === clientId);
-    adSets = adSets.filter(a => a.clientId === clientId);
-    ads = ads.filter(a => a.clientId === clientId);
+  if (effectiveClientId && effectiveClientId !== 'all') {
+    campaigns = campaigns.filter(c => c.clientId === effectiveClientId);
+    adSets = adSets.filter(a => a.clientId === effectiveClientId);
+    ads = ads.filter(a => a.clientId === effectiveClientId);
   }
 
   res.json({
@@ -1633,6 +1679,17 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
   const client = store.clients.find(c => c.id === clientId);
   if (!client) {
     return res.status(404).json({ error: 'Client not found' });
+  }
+
+  // Requirement 4: Remove Scottsdale/AZ fallback coordinates. If no location chosen, block launch.
+  const hasLocation = Boolean(
+    (locationKey && String(locationKey).trim()) ||
+    (city && String(city).trim()) ||
+    (latitude && longitude)
+  );
+
+  if (!hasLocation) {
+    return res.status(400).json({ error: 'Pick a location first.' });
   }
 
   const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
@@ -1696,10 +1753,13 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
       metaCampaignId = campaignRes.id;
       createdEntities.push({ type: 'campaign', id: metaCampaignId });
 
-      // 4. Construct Targeting Geo Locations (Requirement 5)
+      // 4. Construct Targeting Geo Locations (Requirement 4 & 5: No fallbacks to Scottsdale/AZ)
       const geoLocations: any = {};
       if (locationType === 'region' || locationType === 'state') {
-        geoLocations.regions = [{ key: String(locationKey || '3866') }];
+        if (!locationKey) {
+          return res.status(400).json({ error: 'Pick a location first.' });
+        }
+        geoLocations.regions = [{ key: String(locationKey) }];
       } else if (locationKey && (locationType === 'city' || !latitude)) {
         geoLocations.cities = [{
           key: String(locationKey),
@@ -1713,14 +1773,14 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
           radius: effectiveRadius,
           distance_unit: 'mile',
         }];
-      } else {
-        // Fallback custom location coordinates
-        geoLocations.custom_locations = [{
-          latitude: 33.5092,
-          longitude: -111.8990,
+      } else if (city && String(city).trim()) {
+        geoLocations.cities = [{
+          name: String(city).trim(),
           radius: effectiveRadius,
           distance_unit: 'mile',
         }];
+      } else {
+        return res.status(400).json({ error: 'Pick a location first.' });
       }
 
       // 5. Create Ad Set
@@ -1917,8 +1977,8 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
   });
 });
 
-// "Go Live" Endpoint: Sets campaign, ad set, and ad to ACTIVE
-app.post('/api/campaigns/:id/golive', async (req: Request, res: Response) => {
+// "Go Live" Endpoint: Sets campaign, ad set, and ad to ACTIVE (ADMIN PROTECTED - Requirement 2)
+app.post('/api/campaigns/:id/golive', requireAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
   const campaign = store.campaigns.find(c => c.id === id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
@@ -1964,17 +2024,18 @@ app.post('/api/campaigns/:id/golive', async (req: Request, res: Response) => {
   res.json({ success: true, campaign });
 });
 
-// Toggle Pause / Resume on Campaign, AdSet, or Ad
-app.post('/api/campaigns/:id/toggle', async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { type, newStatus } = req.body; // type: 'campaign' | 'ad' | 'adset'
+// Toggle Pause / Resume on Campaign, AdSet, or Ad (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, async (req: Request, res: Response) => {
+  const targetId = req.params.id || req.body.id;
+  const { type, newStatus, status } = req.body; // type: 'campaign' | 'ad' | 'adset' | 'adSet'
+  const desiredStatus = newStatus || status;
   const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
   const token = store.metaConfig.token;
 
   if (type === 'ad') {
-    const ad = store.ads.find(a => a.id === id);
+    const ad = store.ads.find(a => a.id === targetId);
     if (!ad) return res.status(404).json({ error: 'Ad not found' });
-    const targetStatus = newStatus || (ad.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
+    const targetStatus = desiredStatus || (ad.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
 
     if (isLive && ad.metaAdId) {
       try {
@@ -1994,10 +2055,31 @@ app.post('/api/campaigns/:id/toggle', async (req: Request, res: Response) => {
     return res.json({ success: true, item: ad });
   }
 
-  const campaign = store.campaigns.find(c => c.id === id);
-  if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+  const campaign = store.campaigns.find(c => c.id === targetId);
+  if (!campaign) {
+    // Check if it's an adset
+    const adSet = store.adSets.find(as => as.id === targetId);
+    if (adSet) {
+      const targetStatus = desiredStatus || (adSet.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
+      if (isLive && adSet.metaAdSetId) {
+        try {
+          await callMetaApi(adSet.metaAdSetId, {
+            method: 'POST',
+            token,
+            body: { status: targetStatus },
+          });
+        } catch (err: any) {
+          return res.status(400).json({ error: `Meta Error: ${err.message}` });
+        }
+      }
+      adSet.status = targetStatus;
+      persist();
+      return res.json({ success: true, item: adSet });
+    }
+    return res.status(404).json({ error: 'Item not found' });
+  }
 
-  const updatedStatus = newStatus || (campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
+  const updatedStatus = desiredStatus || (campaign.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
 
   if (isLive && campaign.metaCampaignId) {
     try {
@@ -2012,8 +2094,8 @@ app.post('/api/campaigns/:id/toggle', async (req: Request, res: Response) => {
   }
 
   campaign.status = updatedStatus;
-  store.adSets.filter(a => a.campaignId === id).forEach(as => as.status = updatedStatus);
-  store.ads.filter(a => a.campaignId === id).forEach(ad => {
+  store.adSets.filter(a => a.campaignId === targetId).forEach(as => as.status = updatedStatus);
+  store.ads.filter(a => a.campaignId === targetId).forEach(ad => {
     if (ad.status !== 'REJECTED') {
       ad.status = updatedStatus;
       ad.effectiveStatus = updatedStatus;
@@ -2024,9 +2106,9 @@ app.post('/api/campaigns/:id/toggle', async (req: Request, res: Response) => {
   res.json({ success: true, item: campaign });
 });
 
-// Update Daily Budget (takes effect immediately on Meta)
-app.post('/api/campaigns/:id/budget', async (req: Request, res: Response) => {
-  const { id } = req.params;
+// Update Daily Budget (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/campaigns/:id/budget', '/api/actions/budget'], requireAdmin, async (req: Request, res: Response) => {
+  const targetId = req.params.id || req.body.adSetId || req.body.id;
   const { dailyBudget } = req.body;
   const num = Number(dailyBudget);
   if (isNaN(num) || num <= 0) return res.status(400).json({ error: 'Invalid budget amount' });
@@ -2035,7 +2117,7 @@ app.post('/api/campaigns/:id/budget', async (req: Request, res: Response) => {
   const token = store.metaConfig.token;
 
   // Check if id is an ad, adset, or campaign
-  const ad = store.ads.find(a => a.id === id);
+  const ad = store.ads.find(a => a.id === targetId);
   if (ad) {
     const adSet = store.adSets.find(as => as.id === ad.adSetId);
     if (adSet) {
@@ -2058,11 +2140,31 @@ app.post('/api/campaigns/:id/budget', async (req: Request, res: Response) => {
     return res.json({ success: true, dailyBudget: num });
   }
 
-  const campaign = store.campaigns.find(c => c.id === id);
+  const adSet = store.adSets.find(as => as.id === targetId);
+  if (adSet) {
+    if (isLive && adSet.metaAdSetId) {
+      try {
+        await callMetaApi(adSet.metaAdSetId, {
+          method: 'POST',
+          token,
+          body: { daily_budget: Math.round(num * 100) },
+        });
+      } catch (err: any) {
+        return res.status(400).json({ error: `Meta Error updating budget: ${err.message}` });
+      }
+    }
+    adSet.dailyBudget = num;
+    const camp = store.campaigns.find(c => c.id === adSet.campaignId);
+    if (camp) camp.dailyBudget = num;
+    persist();
+    return res.json({ success: true, dailyBudget: num });
+  }
+
+  const campaign = store.campaigns.find(c => c.id === targetId);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
   campaign.dailyBudget = num;
-  const childAdSets = store.adSets.filter(a => a.campaignId === id);
+  const childAdSets = store.adSets.filter(a => a.campaignId === targetId);
   for (const as of childAdSets) {
     as.dailyBudget = num;
     if (isLive && as.metaAdSetId) {
@@ -2082,13 +2184,13 @@ app.post('/api/campaigns/:id/budget', async (req: Request, res: Response) => {
   res.json({ success: true, campaign });
 });
 
-// Duplicate Ad or Campaign
-app.post('/api/campaigns/:id/duplicate', async (req: Request, res: Response) => {
-  const { id } = req.params;
+// Duplicate Ad or Campaign (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/campaigns/:id/duplicate', '/api/actions/duplicate'], requireAdmin, async (req: Request, res: Response) => {
+  const targetId = req.params.id || req.body.id;
   const { type } = req.body;
 
   if (type === 'ad') {
-    const sourceAd = store.ads.find(a => a.id === id);
+    const sourceAd = store.ads.find(a => a.id === targetId);
     if (!sourceAd) return res.status(404).json({ error: 'Ad not found' });
 
     const duplicatedAd = {
@@ -2105,7 +2207,7 @@ app.post('/api/campaigns/:id/duplicate', async (req: Request, res: Response) => 
     return res.json({ success: true, item: duplicatedAd });
   }
 
-  const sourceCampaign = store.campaigns.find(c => c.id === id);
+  const sourceCampaign = store.campaigns.find(c => c.id === targetId);
   if (!sourceCampaign) return res.status(404).json({ error: 'Campaign not found' });
 
   const timestamp = Date.now();
@@ -2120,7 +2222,7 @@ app.post('/api/campaigns/:id/duplicate', async (req: Request, res: Response) => 
 
   store.campaigns.unshift(duplicatedCampaign);
 
-  const childAdSets = store.adSets.filter(as => as.campaignId === id);
+  const childAdSets = store.adSets.filter(as => as.campaignId === targetId);
   childAdSets.forEach(as => {
     const newAsId = `adset-${timestamp}-${as.id}`;
     store.adSets.unshift({
@@ -2147,15 +2249,15 @@ app.post('/api/campaigns/:id/duplicate', async (req: Request, res: Response) => 
   res.json({ success: true, item: duplicatedCampaign });
 });
 
-// Archive
-app.post('/api/campaigns/:id/archive', async (req: Request, res: Response) => {
-  const { id } = req.params;
+// Archive Ad or Campaign (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/campaigns/:id/archive', '/api/actions/archive'], requireAdmin, async (req: Request, res: Response) => {
+  const targetId = req.params.id || req.body.id;
   const { type } = req.body;
   const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
   const token = store.metaConfig.token;
 
   if (type === 'ad') {
-    const ad = store.ads.find(a => a.id === id);
+    const ad = store.ads.find(a => a.id === targetId);
     if (ad) {
       if (isLive && ad.metaAdId) {
         try {
@@ -2169,7 +2271,7 @@ app.post('/api/campaigns/:id/archive', async (req: Request, res: Response) => {
     return res.json({ success: true });
   }
 
-  const campaign = store.campaigns.find(c => c.id === id);
+  const campaign = store.campaigns.find(c => c.id === targetId);
   if (campaign) {
     if (isLive && campaign.metaCampaignId) {
       try {
@@ -2177,8 +2279,8 @@ app.post('/api/campaigns/:id/archive', async (req: Request, res: Response) => {
       } catch (e) {}
     }
     campaign.status = 'ARCHIVED';
-    store.adSets.filter(as => as.campaignId === id).forEach(as => as.status = 'ARCHIVED');
-    store.ads.filter(ad => ad.campaignId === id).forEach(ad => {
+    store.adSets.filter(as => as.campaignId === targetId).forEach(as => as.status = 'ARCHIVED');
+    store.ads.filter(ad => ad.campaignId === targetId).forEach(ad => {
       ad.status = 'ARCHIVED';
       ad.effectiveStatus = 'ARCHIVED';
     });
@@ -2187,8 +2289,8 @@ app.post('/api/campaigns/:id/archive', async (req: Request, res: Response) => {
   res.json({ success: true });
 });
 
-// Requirement 4: Delete Ad (with confirmation & Meta delete)
-app.delete('/api/ads/:id', async (req: Request, res: Response) => {
+// Delete Ad (ADMIN PROTECTED - Requirement 2)
+app.delete('/api/ads/:id', requireAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
   const ad = store.ads.find(a => a.id === id);
   if (!ad) return res.status(404).json({ error: 'Ad not found' });
@@ -2205,15 +2307,27 @@ app.delete('/api/ads/:id', async (req: Request, res: Response) => {
   }
 
   store.ads = store.ads.filter(a => a.id !== id);
+
+  if (firestoreDb) {
+    firestoreDb.collection('ads').doc(id).delete().catch(err => {
+      console.error('[Firestore Admin] Delete ad error:', err.message);
+      lastSaveError = `Delete ad error: ${err.message}`;
+    });
+  }
+
   persist();
   res.json({ success: true, message: 'Ad deleted successfully' });
 });
 
-// Requirement 3 & 4: AD DETAIL DATA
-app.get('/api/ads/:id', async (req: Request, res: Response) => {
+// Ad Detail (Client isolated: only view own client's ad)
+app.get('/api/ads/:id', requireClientOrAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
   const ad = store.ads.find(a => a.id === id);
   if (!ad) return res.status(404).json({ error: 'Ad not found' });
+
+  if ((req as any).isClient && (req as any).clientId !== ad.clientId) {
+    return res.status(403).json({ error: 'Forbidden: Access restricted to your own client account ads only.' });
+  }
 
   const client = store.clients.find(c => c.id === ad.clientId);
   const campaign = store.campaigns.find(c => c.id === ad.campaignId);
@@ -2309,8 +2423,8 @@ app.get('/api/ads/:id', async (req: Request, res: Response) => {
   });
 });
 
-// Requirement 4: EDIT AD FROM DASHBOARD
-app.post('/api/ads/:id/edit', async (req: Request, res: Response) => {
+// EDIT AD FROM DASHBOARD (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
   const ad = store.ads.find(a => a.id === id);
   if (!ad) return res.status(404).json({ error: 'Ad not found' });
@@ -2491,13 +2605,18 @@ app.post('/api/ads/:id/edit', async (req: Request, res: Response) => {
   });
 });
 
-// Insights & Stats Calculation (Live or Cached)
-app.get('/api/insights', async (req: Request, res: Response) => {
-  const clientId = req.query.clientId as string | undefined;
-  const range = (req.query.range as string) || '30d';
+// Insights & Stats Calculation (Live or Cached, Tenant Isolated - Requirement 2)
+app.get('/api/insights', requireClientOrAdmin, async (req: Request, res: Response) => {
+  let clientId = req.query.clientId as string | undefined;
+  if ((req as any).isClient) {
+    clientId = (req as any).clientId;
+  }
+  const range = (req.query.range as string) || (req.query.dateRange as string) || '30d';
 
   let targetClients = store.clients;
-  if (clientId && clientId !== 'all') {
+  if ((req as any).isClient) {
+    targetClients = (req as any).client ? [(req as any).client] : [];
+  } else if (clientId && clientId !== 'all') {
     targetClients = store.clients.filter(c => c.id === clientId);
   }
 
@@ -2620,8 +2739,9 @@ app.get('/api/insights', async (req: Request, res: Response) => {
   }
 
   // Ad level statistics with real Meta delivery status
+  const effectiveClientFilter = (req as any).isClient ? (req as any).clientId : clientId;
   const adStats = store.ads
-    .filter(ad => !clientId || clientId === 'all' || ad.clientId === clientId)
+    .filter(ad => !effectiveClientFilter || effectiveClientFilter === 'all' || ad.clientId === effectiveClientFilter)
     .map(ad => {
       const client = store.clients.find(c => c.id === ad.clientId);
       const camp = store.campaigns.find(c => c.id === ad.campaignId);
@@ -2686,7 +2806,7 @@ app.get('/api/insights', async (req: Request, res: Response) => {
       actionNeeded: 'Recommend adjusting audience radius or refreshing ad creative.',
     }));
 
-  store.ads.filter(a => a.status === 'REJECTED' && (!clientId || clientId === 'all' || a.clientId === clientId)).forEach(a => {
+  store.ads.filter(a => a.status === 'REJECTED' && (!effectiveClientFilter || effectiveClientFilter === 'all' || a.clientId === effectiveClientFilter)).forEach(a => {
     const client = store.clients.find(c => c.id === a.clientId);
     attentionItems.push({
       type: 'REJECTED_AD',
@@ -2730,14 +2850,17 @@ app.get('/api/insights', async (req: Request, res: Response) => {
   });
 });
 
-// Recent Leads list
-app.get('/api/leads', (req: Request, res: Response) => {
-  const clientId = req.query.clientId as string | undefined;
+// Recent Leads list (Tenant Isolated - Requirement 2)
+app.get('/api/leads', requireClientOrAdmin, (req: Request, res: Response) => {
+  let effectiveClientId = req.query.clientId as string | undefined;
+  if ((req as any).isClient) {
+    effectiveClientId = (req as any).clientId;
+  }
   const adId = req.query.adId as string | undefined;
   let leads = store.leads;
 
-  if (clientId && clientId !== 'all') {
-    leads = leads.filter(l => l.clientId === clientId);
+  if (effectiveClientId && effectiveClientId !== 'all') {
+    leads = leads.filter(l => l.clientId === effectiveClientId);
   }
   if (adId) {
     leads = leads.filter(l => l.adId === adId);
@@ -2745,8 +2868,8 @@ app.get('/api/leads', (req: Request, res: Response) => {
   res.json(leads);
 });
 
-// Manual / Instant Lead Sync from Meta
-app.post('/api/leads/sync', async (req: Request, res: Response) => {
+// Manual / Instant Lead Sync from Meta (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/leads/sync', '/api/leads/sync-now'], requireAdmin, async (req: Request, res: Response) => {
   await syncAllLiveLeads();
   res.json({
     success: true,
@@ -2755,8 +2878,8 @@ app.post('/api/leads/sync', async (req: Request, res: Response) => {
   });
 });
 
-// Simulate Instant Form Lead Submission
-app.post('/api/leads/simulate-lead', async (req: Request, res: Response) => {
+// Simulate Instant Form Lead Submission (ADMIN PROTECTED - Requirement 2)
+app.post('/api/leads/simulate-lead', requireAdmin, async (req: Request, res: Response) => {
   const { clientId, adId, fullName, phone, email, customAnswers } = req.body;
   const client = store.clients.find(c => c.id === clientId) || store.clients[0];
   const ad = store.ads.find(a => a.id === adId) || store.ads[0];
@@ -2796,8 +2919,8 @@ app.post('/api/leads/simulate-lead', async (req: Request, res: Response) => {
   });
 });
 
-// Scrape Images from Client Website
-app.post('/api/scrape-images', async (req: Request, res: Response) => {
+// Scrape Images from Client Website (ADMIN PROTECTED - Requirement 2)
+app.post(['/api/scrape-images', '/api/tools/scrape-images'], requireAdmin, async (req: Request, res: Response) => {
   const { url } = req.body;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ error: 'Valid website URL is required' });
@@ -2889,8 +3012,8 @@ function resolveUrl(relativeOrAbsolute: string, baseUrl: string): string {
   }
 }
 
-// Requirement 6: Real Ad Copywriting using Gemini 3.8 Flash
-app.post('/api/gemini/copy', async (req: Request, res: Response) => {
+// Requirement 6: Real Ad Copywriting using Gemini 3.8 Flash (ADMIN PROTECTED - Requirement 2)
+app.post('/api/gemini/copy', requireAdmin, async (req: Request, res: Response) => {
   const { clientName, niche, offer, city, state, variationSeed } = req.body;
 
   if (aiClient) {
@@ -3042,8 +3165,8 @@ function getPolicyCompliantTemplates(niche: string, offer: string, clientName: s
   ];
 }
 
-// Requirement 6: Real Image Generation (Gemini Google Image Model)
-app.post('/api/gemini/image', async (req: Request, res: Response) => {
+// Requirement 6: Real Image Generation (Gemini Google Image Model) (ADMIN PROTECTED - Requirement 2)
+app.post('/api/gemini/image', requireAdmin, async (req: Request, res: Response) => {
   const { promptDescription, niche, format } = req.body;
   const isVertical = format === '9:16';
 
@@ -3121,9 +3244,13 @@ app.post('/api/gemini/image', async (req: Request, res: Response) => {
   });
 });
 
-// Weekly Client Report Preview
-app.get('/api/weekly-report/:clientId', (req: Request, res: Response) => {
+// Weekly Client Report Preview (Tenant Isolated - Requirement 2)
+app.get('/api/weekly-report/:clientId', requireClientOrAdmin, (req: Request, res: Response) => {
   const { clientId } = req.params;
+  if ((req as any).isClient && (req as any).clientId !== clientId) {
+    return res.status(403).json({ error: 'Forbidden: Access restricted to your own weekly report.' });
+  }
+
   const client = store.clients.find(c => c.id === clientId) || store.clients[0];
   const clientAds = store.ads.filter(a => a.clientId === client.id && a.status === 'ACTIVE');
   const bestAd = clientAds[0] || store.ads[0];
@@ -3171,7 +3298,8 @@ ecentraconcierge.com`;
   });
 });
 
-app.post('/api/weekly-report/:clientId/toggle', (req: Request, res: Response) => {
+// Toggle Weekly Client Report (ADMIN PROTECTED - Requirement 2)
+app.post('/api/weekly-report/:clientId/toggle', requireAdmin, (req: Request, res: Response) => {
   const { clientId } = req.params;
   const { enabled } = req.body;
   const client = store.clients.find(c => c.id === clientId);

@@ -75,15 +75,10 @@ export const LoginModal: React.FC<LoginModalProps> = ({
         throw new Error('This is an internal agency asset without a separate client portal.');
       }
 
-      // Verify PIN against client access code
-      const expectedPin = client.clientAccessCode || `${client.businessName.split(' ')[0].toUpperCase()}-${client.id.slice(-2)}`;
-      if (clientPin.trim().toUpperCase() !== expectedPin.toUpperCase() && clientPin.trim() !== '1234') {
-        throw new Error(`Invalid access code for ${client.businessName}. Expected format: ${expectedPin}`);
-      }
-
-      // Set client session
-      setClientSessionPin(`client_session_${client.id}`);
-      onClientLoginSuccess(client);
+      // Authenticate with server endpoint
+      const authRes = await api.verifyClientPortalPin(client.id, clientPin.trim());
+      setClientSessionPin(authRes.token);
+      onClientLoginSuccess(authRes.client || client);
     } catch (err: any) {
       setErrorMessage(err.message || 'Invalid access credentials');
     } finally {

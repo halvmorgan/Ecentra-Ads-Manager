@@ -52,6 +52,7 @@ export default function App() {
   const [weeklyReportClient, setWeeklyReportClient] = useState<Client | null>(null);
   const [budgetModal, setBudgetModal] = useState<{ clientId: string; adId: string; currentBudget: number } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [storageError, setStorageError] = useState<string | null>(null);
 
   // Monitor Firebase Auth State (Harold Google Sign-In)
   useEffect(() => {
@@ -111,6 +112,11 @@ export default function App() {
       setAdStats(insightsRes.adStats);
       setAttentionItems(insightsRes.attentionItems);
       setLeads(leadsRes);
+      if ((statusRes as any).lastSaveError) {
+        setStorageError((statusRes as any).lastSaveError);
+      } else {
+        setStorageError(null);
+      }
     } catch (err) {
       console.error('Failed to load application data:', err);
     } finally {
@@ -284,6 +290,22 @@ export default function App() {
         onOpenLogin={() => setIsLoginModalOpen(true)}
         onLogout={handleLogout}
       />
+
+      {/* Storage Alert Banner (Requirement 3: Visible error in dashboard if a save fails) */}
+      {storageError && (
+        <div className="bg-red-50 border-b border-red-200 px-6 py-2.5 text-xs text-red-900 flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>
+            <span><strong>Cloud Firestore Storage Alert:</strong> {storageError}</span>
+          </div>
+          <button
+            onClick={() => setStorageError(null)}
+            className="text-red-700 hover:text-red-950 font-bold ml-4 cursor-pointer text-xs"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Main Body */}
       {currentView === 'client' ? (
