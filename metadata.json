@@ -1,0 +1,6 @@
+{
+  "name": "Ecentra Ads Manager",
+  "description": "Members-only Facebook and Instagram ads dashboard and lead-generation portal for Ecentra Concierge agency clients.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
