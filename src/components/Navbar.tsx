@@ -14,7 +14,7 @@ import {
   Eye,
   FileText
 } from 'lucide-react';
-import { Client } from '../types';
+import { Client, UserSession } from '../types';
 
 interface NavbarProps {
   currentView: 'admin' | 'client';
@@ -31,6 +31,9 @@ interface NavbarProps {
   isRefreshing: boolean;
   liveMode: boolean;
   onToggleLiveMode: (live: boolean) => void;
+  session: UserSession | null;
+  onOpenLogin: () => void;
+  onLogout: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -48,6 +51,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRefreshing,
   liveMode,
   onToggleLiveMode,
+  session,
+  onOpenLogin,
+  onLogout,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs">
@@ -62,13 +68,13 @@ export const Navbar: React.FC<NavbarProps> = ({
           <span className="text-slate-400 hidden sm:inline">Meta Marketing API v21.0 & GHL Integration</span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {/* Demo Mode Toggle */}
           <div className="flex items-center gap-2 bg-slate-800/80 px-2.5 py-0.5 rounded-full border border-slate-700">
             <span className="text-[11px] text-slate-300 font-medium">Mode:</span>
             <button
               onClick={() => onToggleLiveMode(!liveMode)}
-              className={`text-[11px] px-2 py-0.5 rounded-full font-semibold transition-all ${
+              className={`text-[11px] px-2 py-0.5 rounded-full font-semibold transition-all cursor-pointer ${
                 !liveMode 
                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40' 
                   : 'text-slate-400 hover:text-white'
@@ -78,7 +84,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
             <button
               onClick={() => onToggleLiveMode(true)}
-              className={`text-[11px] px-2 py-0.5 rounded-full font-semibold transition-all ${
+              className={`text-[11px] px-2 py-0.5 rounded-full font-semibold transition-all cursor-pointer ${
                 liveMode 
                   ? 'bg-emerald-500 text-white' 
                   : 'text-slate-400 hover:text-white'
@@ -88,30 +94,65 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
           </div>
 
+          {/* User Session Info / Login Button */}
+          {session ? (
+            <div className="flex items-center gap-2 bg-slate-800/90 pl-2.5 pr-1.5 py-0.5 rounded-lg border border-slate-700 text-[11px]">
+              {session.isAdmin ? (
+                <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Admin:</span>
+                  <span className="text-white font-mono text-[10px]">halvmorgan@gmail.com</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-amber-300 font-medium">
+                  <span className="w-2 h-2 rounded-full bg-amber-400"></span>
+                  <span className="truncate max-w-[120px]">{session.clientBusinessName}</span>
+                  <span className="text-[10px] text-slate-400 font-normal">(Client Portal)</span>
+                </div>
+              )}
+              <button
+                onClick={onLogout}
+                className="text-[10px] text-slate-400 hover:text-red-400 ml-1 px-1.5 py-0.5 rounded hover:bg-slate-700/60 transition-colors"
+                title="Sign Out"
+              >
+                Sign Out
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={onOpenLogin}
+              className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded text-[11px] font-semibold transition-colors cursor-pointer"
+            >
+              Sign In
+            </button>
+          )}
+
           {/* Role Mode Switcher (Admin vs Client Portal) */}
-          <div className="flex items-center bg-slate-800 rounded p-0.5 border border-slate-700">
-            <button
-              onClick={() => onViewChange('admin')}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-medium transition-all ${
-                currentView === 'admin'
-                  ? 'bg-slate-700 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Admin (Harold)
-            </button>
-            <button
-              onClick={() => onViewChange('client')}
-              className={`px-2.5 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-all ${
-                currentView === 'client'
-                  ? 'bg-amber-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <Eye className="w-3 h-3" />
-              Client View
-            </button>
-          </div>
+          {(!session || session.isAdmin) && (
+            <div className="flex items-center bg-slate-800 rounded p-0.5 border border-slate-700">
+              <button
+                onClick={() => onViewChange('admin')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium transition-all ${
+                  currentView === 'admin'
+                    ? 'bg-slate-700 text-white shadow-xs font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Admin (Harold)
+              </button>
+              <button
+                onClick={() => onViewChange('client')}
+                className={`px-2 py-0.5 rounded text-[11px] font-medium flex items-center gap-1 transition-all ${
+                  currentView === 'client'
+                    ? 'bg-amber-600 text-white shadow-xs font-semibold'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                Client View
+              </button>
+            </div>
+          )}
         </div>
       </div>
 

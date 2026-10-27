@@ -1,0 +1,89 @@
+{
+  "entities": {
+    "SystemConfig": {
+      "title": "System Configuration",
+      "description": "System-wide settings and admin user authorizations",
+      "type": "object",
+      "properties": {
+        "adminEmail": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["adminEmail"]
+    },
+    "ClientRecord": {
+      "title": "Client Record",
+      "description": "Client profile or internal business with service area, targeting preferences, and Meta links",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "maxLength": 100 },
+        "niche": { "type": "string", "maxLength": 50 },
+        "websiteUrl": { "type": "string", "maxLength": 255 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "isOwnBusiness": { "type": "boolean" },
+        "targetCpl": { "type": "number" },
+        "monthlyBudget": { "type": "number" }
+      },
+      "required": ["businessName", "websiteUrl"]
+    },
+    "CampaignRecord": {
+      "title": "Campaign Record",
+      "description": "Meta campaign container with objective and special ad categories",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 150 },
+        "objective": { "type": "string", "enum": ["OUTCOME_LEADS", "OUTCOME_TRAFFIC"] },
+        "specialAdCategories": { "type": "array" },
+        "status": { "type": "string" }
+      },
+      "required": ["clientId", "name", "objective"]
+    },
+    "AdRecord": {
+      "title": "Ad Creative & Performance Record",
+      "description": "Meta ad creative metadata, targeting, and live performance metrics",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 64 },
+        "campaignId": { "type": "string", "maxLength": 64 },
+        "name": { "type": "string", "maxLength": 150 },
+        "status": { "type": "string", "maxLength": 32 },
+        "goalType": { "type": "string", "enum": ["LEAD_GEN", "TRAFFIC_WEBSITE"] }
+      },
+      "required": ["clientId", "campaignId", "name", "status"]
+    },
+    "LeadRecord": {
+      "title": "Lead Record",
+      "description": "Incoming lead captured via Meta Instant Forms",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string", "maxLength": 64 },
+        "fullName": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 30 }
+      },
+      "required": ["clientId", "fullName"]
+    }
+  },
+  "firestore": {
+    "/system/{configId}": {
+      "schema": "SystemConfig",
+      "description": "System configuration documents"
+    },
+    "/clients/{clientId}": {
+      "schema": "ClientRecord",
+      "description": "Profiles for clients and internal agency businesses"
+    },
+    "/campaigns/{campaignId}": {
+      "schema": "CampaignRecord",
+      "description": "Meta ad campaigns"
+    },
+    "/ads/{adId}": {
+      "schema": "AdRecord",
+      "description": "Ad creatives and performance records"
+    },
+    "/leads/{leadId}": {
+      "schema": "LeadRecord",
+      "description": "Prospective client leads"
+    }
+  }
+}

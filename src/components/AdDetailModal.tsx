@@ -267,24 +267,40 @@ export const AdDetailModal: React.FC<AdDetailModalProps> = ({
               {/* Top Hero Performance Cards for this Ad */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Cost Per Lead</span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">
+                    {ad?.goalType === 'TRAFFIC_WEBSITE' ? 'Cost Per Click (CPC)' : 'Cost Per Lead'}
+                  </span>
                   <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                    ${stats?.cpl.toFixed(2)}
+                    ${ad?.goalType === 'TRAFFIC_WEBSITE'
+                      ? (stats?.cpc || (stats?.clicks ? stats.spend / stats.clicks : 0)).toFixed(2)
+                      : stats?.cpl.toFixed(2)}
                   </div>
                   <span className={`text-[10px] font-semibold mt-1 inline-block ${
-                    isCplGood ? 'text-emerald-700' : 'text-red-600'
+                    client?.isOwnBusiness || ad?.goalType === 'TRAFFIC_WEBSITE'
+                      ? 'text-blue-700'
+                      : isCplGood ? 'text-emerald-700' : 'text-red-600'
                   }`}>
-                    Target: ${stats?.targetCpl.toFixed(2)}
+                    {ad?.goalType === 'TRAFFIC_WEBSITE'
+                      ? 'Website Traffic Optimization'
+                      : client?.isOwnBusiness
+                      ? 'Internal Agency Asset'
+                      : `Target: $${stats?.targetCpl.toFixed(2)}`}
                   </span>
                 </div>
 
                 <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase block">Total Leads</span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase block">
+                    {ad?.goalType === 'TRAFFIC_WEBSITE' ? 'Link Clicks / Views' : 'Total Leads'}
+                  </span>
                   <div className="text-xl font-extrabold text-slate-900 mt-0.5">
-                    {stats?.leads}
+                    {ad?.goalType === 'TRAFFIC_WEBSITE'
+                      ? `${stats?.clicks.toLocaleString()}`
+                      : stats?.leads}
                   </div>
                   <span className="text-[10px] text-slate-500 mt-1 inline-block">
-                    Verified Form Submissions
+                    {ad?.goalType === 'TRAFFIC_WEBSITE'
+                      ? `${stats?.landingPageViews || Math.round((stats?.clicks || 0) * 0.88)} landing page views`
+                      : 'Verified Form Submissions'}
                   </span>
                 </div>
 

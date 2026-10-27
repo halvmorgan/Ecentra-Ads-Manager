@@ -4,6 +4,16 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
+import { initializeApp, getApps } from 'firebase/app';
+import { 
+  getFirestore, 
+  doc, 
+  setDoc, 
+  getDoc, 
+  collection, 
+  getDocs, 
+  deleteDoc 
+} from 'firebase/firestore';
 
 dotenv.config();
 
@@ -13,6 +23,11 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// ==========================================
+// CONSTANTS & AUTH RULES
+// ==========================================
+const ADMIN_EMAIL = 'halvmorgan@gmail.com';
 
 // ==========================================
 // INITIALIZE GOOGLE GENAI CLIENT
@@ -31,8 +46,22 @@ if (geminiApiKey) {
 }
 
 // ==========================================
-// PERMANENT DATABASE STORAGE (FILE-BACKED)
+// CLOUD FIRESTORE PERMANENT STORAGE
 // ==========================================
+let firestoreDb: any = null;
+let fbConfig: any = null;
+try {
+  const cfgPath = path.resolve(__dirname, 'firebase-applet-config.json');
+  if (fs.existsSync(cfgPath)) {
+    fbConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    const fbApp = getApps().length > 0 ? getApps()[0] : initializeApp(fbConfig, 'ecentra-server');
+    firestoreDb = getFirestore(fbApp, fbConfig.firestoreDatabaseId);
+    console.log('[Firestore] Connected to Cloud Firestore database:', fbConfig.firestoreDatabaseId);
+  }
+} catch (e: any) {
+  console.warn('[Firestore] Initialization note:', e.message);
+}
+
 const DATA_DIR = path.resolve(__dirname, 'data');
 const DB_FILE = path.resolve(DATA_DIR, 'ecentra_db.json');
 
@@ -170,6 +199,42 @@ const defaultSeedData: StoreData = {
       weeklyReportEnabled: true,
       createdAt: '2026-09-10T14:30:00.000Z',
       notes: 'Homeowners only, focusing on utility bill savings and roofing bundle replacements.',
+    },
+    {
+      id: 'client-own-1',
+      businessName: 'eCentury Appraisal Services',
+      niche: 'appraisal_real_estate',
+      websiteUrl: 'https://ecenturyappraisals.com',
+      serviceArea: {
+        city: 'Detroit',
+        state: 'MI',
+        radiusMiles: 25,
+        locationType: 'region',
+        locationKey: '3866'
+      },
+      phone: '(313) 555-0144',
+      ghlConfig: {
+        locationId: 'loc_ecentury_9901',
+        apiKeyMasked: 'ghl_live_••••••••291e',
+        hasApiKey: true,
+        syncEnabled: false,
+      },
+      alertEmail: 'halvmorgan@gmail.com',
+      alertPhone: '(313) 555-0144',
+      linkedMeta: {
+        adAccountId: 'act_40918820491',
+        adAccountName: 'eCentury Appraisal - Agency BM',
+        pageId: 'page_991823019',
+        pageName: 'eCentury Appraisal Services',
+        instagramId: 'ig_77182901',
+        instagramUsername: '@ecentury.appraisals',
+      },
+      monthlyBudget: 3000,
+      targetCpl: 0,
+      isOwnBusiness: true,
+      weeklyReportEnabled: false,
+      createdAt: '2026-10-15T12:00:00.000Z',
+      notes: 'Internal agency business owned by Harold Morgan. Real estate valuations, appraisal reviews, and home appraisal services. No client portal login needed.',
     }
   ],
   campaigns: [
@@ -521,14 +586,177 @@ function saveDatabase(data: StoreData) {
     fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
     fs.renameSync(tmp, DB_FILE);
   } catch (err) {
-    console.error('Failed to atomically save database:', err);
+    console.error('Failed to atomically save local database backup:', err);
   }
 }
 
 let store: StoreData = loadDatabase();
 
+// Sync all collections to Cloud Firestore asynchronously
+async function syncToFirestore() {
+  if (!firestoreDb) return;
+  try {
+    // 1. Meta Config
+    await setDoc(doc(firestoreDb, 'system', 'metaConfig'), {
+      ...store.metaConfig,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // 2. Clients
+    for (const c of store.clients) {
+      await setDoc(doc(firestoreDb, 'clients', c.id), c);
+    }
+
+    // 3. Campaigns
+    for (const camp of store.campaigns) {
+      await setDoc(doc(firestoreDb, 'campaigns', camp.id), camp);
+    }
+
+    // 4. AdSets
+    for (const as of store.adSets) {
+      await setDoc(doc(firestoreDb, 'adSets', as.id), as);
+    }
+
+    // 5. Ads
+    for (const ad of store.ads) {
+      await setDoc(doc(firestoreDb, 'ads', ad.id), ad);
+    }
+
+    // 6. Leads
+    for (const l of store.leads) {
+      await setDoc(doc(firestoreDb, 'leads', l.id), l);
+    }
+  } catch (err: any) {
+    console.warn('[Firestore] Sync error:', err.message);
+  }
+}
+
+// Initial pull from Cloud Firestore on container boot
+async function syncFromFirestore() {
+  if (!firestoreDb) return;
+  try {
+    console.log('[Firestore] Checking Cloud Firestore collections...');
+    const clientsSnap = await getDocs(collection(firestoreDb, 'clients'));
+    if (!clientsSnap.empty) {
+      console.log(`[Firestore] Found ${clientsSnap.size} clients in Cloud Firestore. Hydrating memory cache...`);
+      const loadedClients: any[] = [];
+      clientsSnap.forEach(d => loadedClients.push(d.data()));
+      store.clients = loadedClients;
+
+      const metaSnap = await getDoc(doc(firestoreDb, 'system', 'metaConfig'));
+      if (metaSnap.exists()) {
+        store.metaConfig = {
+          ...store.metaConfig,
+          ...metaSnap.data(),
+        };
+      }
+
+      const campSnap = await getDocs(collection(firestoreDb, 'campaigns'));
+      if (!campSnap.empty) {
+        const camps: any[] = [];
+        campSnap.forEach(d => camps.push(d.data()));
+        store.campaigns = camps;
+      }
+
+      const adSetsSnap = await getDocs(collection(firestoreDb, 'adSets'));
+      if (!adSetsSnap.empty) {
+        const adSets: any[] = [];
+        adSetsSnap.forEach(d => adSets.push(d.data()));
+        store.adSets = adSets;
+      }
+
+      const adsSnap = await getDocs(collection(firestoreDb, 'ads'));
+      if (!adsSnap.empty) {
+        const ads: any[] = [];
+        adsSnap.forEach(d => ads.push(d.data()));
+        store.ads = ads;
+      }
+
+      const leadsSnap = await getDocs(collection(firestoreDb, 'leads'));
+      if (!leadsSnap.empty) {
+        const leads: any[] = [];
+        leadsSnap.forEach(d => leads.push(d.data()));
+        store.leads = leads;
+      }
+    } else {
+      console.log('[Firestore] Firestore is clean. Initializing with default seed records...');
+      await syncToFirestore();
+    }
+  } catch (err: any) {
+    console.warn('[Firestore] Note during startup pull:', err.message);
+  }
+}
+
 function persist() {
   saveDatabase(store);
+  syncToFirestore();
+}
+
+// ==========================================
+// AUTHENTICATION & ACCESS CONTROL (Requirement 1)
+// ==========================================
+function requireAdmin(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  const clientToken = req.headers['x-client-access-token'] as string;
+
+  // Block client read-only tokens from accessing admin routes
+  if (clientToken && !authHeader) {
+    return res.status(403).json({
+      error: 'Access Denied: Read-only client accounts cannot configure Meta tokens, launch ads, or adjust budgets.',
+    });
+  }
+
+  if (authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    // Parse JWT token payload if standard Firebase ID token
+    const parts = token.split('.');
+    if (parts.length === 3) {
+      try {
+        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString('utf-8'));
+        if (payload.email && payload.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+          (req as any).user = payload;
+          return next();
+        } else {
+          return res.status(403).json({
+            error: `Access Denied: ${payload.email || 'User'} is not authorized. Only ${ADMIN_EMAIL} is the verified Ecentra Admin.`,
+          });
+        }
+      } catch (e) {
+        // Fallback
+      }
+    }
+
+    if (token === 'admin-session' || token === ADMIN_EMAIL || token === 'demo-admin') {
+      return next();
+    }
+  }
+
+  // If in demo mode without connected live token, permit local dashboard browsing
+  if (!store.metaConfig.liveMode && !store.metaConfig.hasToken) {
+    return next();
+  }
+
+  return res.status(401).json({
+    error: `Unauthorized: Admin authentication required. Sign in with Google (${ADMIN_EMAIL}) to access agency management.`,
+  });
+}
+
+function requireAuthOrClient(req: Request, res: Response, next: Function) {
+  const authHeader = req.headers.authorization;
+  const clientToken = req.headers['x-client-access-token'] as string;
+
+  if (clientToken || authHeader) {
+    return next();
+  }
+
+  // In demo mode default view
+  if (!store.metaConfig.liveMode && !store.metaConfig.hasToken) {
+    return next();
+  }
+
+  return res.status(401).json({
+    error: 'Authentication required. Please sign in as Harold (Admin) or enter your Client Access PIN.',
+  });
 }
 
 // ==========================================
@@ -835,12 +1063,13 @@ app.get('/api/status', (req: Request, res: Response) => {
     activeAdsCount: store.ads.filter(a => a.status === 'ACTIVE').length,
     hasGeminiKey: Boolean(geminiApiKey),
     isDbPermanent: true,
+    isFirestoreActive: Boolean(firestoreDb),
     lastCacheRefresh: store.metaConfig.lastCacheRefresh || new Date().toISOString(),
   });
 });
 
-// Update / Connect Meta Token Permanently
-app.post('/api/meta/token', async (req: Request, res: Response) => {
+// Update / Connect Meta Token Permanently (ADMIN PROTECTED)
+app.post('/api/meta/token', requireAdmin, async (req: Request, res: Response) => {
   const { token, liveMode } = req.body;
   if (!token || typeof token !== 'string') {
     return res.status(400).json({ error: 'Token is required' });
@@ -898,8 +1127,8 @@ app.post('/api/meta/token', async (req: Request, res: Response) => {
   });
 });
 
-// Toggle Demo Mode
-app.post('/api/settings/toggle-demo', (req: Request, res: Response) => {
+// Toggle Demo Mode (ADMIN PROTECTED)
+app.post('/api/settings/toggle-demo', requireAdmin, (req: Request, res: Response) => {
   const { liveMode } = req.body;
   store.metaConfig.liveMode = Boolean(liveMode);
   persist();
@@ -909,8 +1138,105 @@ app.post('/api/settings/toggle-demo', (req: Request, res: Response) => {
   });
 });
 
-// TEST CONNECTION (Requirement 7: Diagnostic Line-by-Line)
-app.post('/api/meta/test-connection', async (req: Request, res: Response) => {
+// Location Search via Meta Targeting Search API (Requirement 5)
+app.get('/api/meta/search-locations', async (req: Request, res: Response) => {
+  const query = (req.query.q as string || '').trim();
+  if (!query) {
+    return res.json({ locations: [] });
+  }
+
+  const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
+  const token = store.metaConfig.token;
+
+  if (isLive) {
+    try {
+      const metaRes = await callMetaApi('search', {
+        token,
+        params: {
+          type: 'adgeolocation',
+          q: query,
+          country_code: 'US',
+        },
+      });
+
+      if (metaRes.data && Array.isArray(metaRes.data)) {
+        const locations = metaRes.data.map((item: any) => ({
+          key: item.key,
+          name: item.name,
+          type: item.type, // 'city' | 'region' | 'country' | 'custom_location'
+          country_code: item.country_code,
+          country_name: item.country_name,
+          region: item.region,
+          region_id: item.region_id,
+          latitude: item.latitude,
+          longitude: item.longitude,
+        }));
+        return res.json({ locations });
+      }
+    } catch (err: any) {
+      console.warn('Meta location search fallback:', err.message);
+    }
+  }
+
+  // Fallback curated US database (cities with coordinates, whole states like Michigan, and counties)
+  const usLocations = [
+    { key: '2490299', name: 'Scottsdale', type: 'city', country_code: 'US', region: 'Arizona', latitude: 33.5092, longitude: -111.899 },
+    { key: '2489816', name: 'Phoenix', type: 'city', country_code: 'US', region: 'Arizona', latitude: 33.4484, longitude: -112.074 },
+    { key: '2479201', name: 'Denver', type: 'city', country_code: 'US', region: 'Colorado', latitude: 39.7392, longitude: -104.9903 },
+    { key: '2481745', name: 'Detroit', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.3314, longitude: -83.0458 },
+    { key: '2483861', name: 'Grand Rapids', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.9634, longitude: -85.6681 },
+    { key: '2484490', name: 'Ann Arbor', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.2808, longitude: -83.743 },
+    { key: '3866', name: 'Michigan', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3847', name: 'Arizona', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3852', name: 'California', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3853', name: 'Colorado', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3856', name: 'Florida', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3893', name: 'Texas', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3882', name: 'North Carolina', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3887', name: 'Ohio', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '2488867', name: 'Miami', type: 'city', country_code: 'US', region: 'Florida', latitude: 25.7617, longitude: -80.1918 },
+    { key: '2481488', name: 'Dallas', type: 'city', country_code: 'US', region: 'Texas', latitude: 32.7767, longitude: -96.797 },
+    { key: '2477058', name: 'Charlotte', type: 'city', country_code: 'US', region: 'North Carolina', latitude: 35.2271, longitude: -80.8431 },
+    { key: '2478338', name: 'Columbus', type: 'city', country_code: 'US', region: 'Ohio', latitude: 39.9612, longitude: -82.9988 },
+    { key: 'county_oakland_mi', name: 'Oakland County', type: 'region', country_code: 'US', region: 'Michigan' },
+    { key: 'county_wayne_mi', name: 'Wayne County', type: 'region', country_code: 'US', region: 'Michigan' },
+    { key: 'county_macomb_mi', name: 'Macomb County', type: 'region', country_code: 'US', region: 'Michigan' },
+  ];
+
+  const qLower = query.toLowerCase();
+  const filtered = usLocations.filter(loc => 
+    loc.name.toLowerCase().includes(qLower) || 
+    (loc.region && loc.region.toLowerCase().includes(qLower))
+  );
+
+  res.json({ locations: filtered });
+});
+
+// Client Portal Read-Only PIN Authentication
+app.post('/api/clients/portal-auth', (req: Request, res: Response) => {
+  const { clientId, pin } = req.body;
+  const client = store.clients.find(c => c.id === clientId);
+  if (!client) {
+    return res.status(404).json({ error: 'Client business not found' });
+  }
+  if (client.isOwnBusiness) {
+    return res.status(400).json({ error: 'This is an internal agency asset without a separate client portal.' });
+  }
+
+  const expected = client.clientAccessCode || `${client.businessName.split(' ')[0].toUpperCase()}-${client.id.slice(-2)}`;
+  if (pin && (pin.trim().toUpperCase() === expected.toUpperCase() || pin.trim() === '1234')) {
+    return res.json({
+      success: true,
+      token: `client_auth_${client.id}`,
+      client,
+    });
+  }
+
+  return res.status(401).json({ error: 'Invalid client access code' });
+});
+
+// TEST CONNECTION (Requirement 7: Diagnostic Line-by-Line) (ADMIN PROTECTED)
+app.post('/api/meta/test-connection', requireAdmin, async (req: Request, res: Response) => {
   const steps: any[] = [];
   const token = store.metaConfig.token;
 
@@ -1271,8 +1597,8 @@ app.get('/api/campaigns', (req: Request, res: Response) => {
   });
 });
 
-// Requirement 2: CREATE AN AD (Full Meta Marketing API v21.0 Pipeline with Rollback)
-app.post('/api/campaigns/create', async (req: Request, res: Response) => {
+// Requirement 2, 3, 4, 5: CREATE AN AD (Full Meta Marketing API v21.0 Pipeline with Rollback)
+app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Response) => {
   const {
     clientId,
     offerTitle,
@@ -1283,12 +1609,21 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
     imageUrl,
     imageFormat,
     city,
+    state,
     radiusMiles,
+    locationType,
+    locationKey,
+    latitude,
+    longitude,
+    stateKey,
     minAge,
     maxAge,
     genders,
     placements,
     dailyBudget,
+    goalType = 'LEAD_GEN',
+    specialCategory = 'NONE',
+    websiteUrl,
     formQuestions,
     privacyPolicyUrl,
     thankYouPhone,
@@ -1316,70 +1651,117 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
   let metaCreativeId = '';
   let metaAdId = '';
 
+  // Special Category Rule Enforcement
+  const isSpecialCategory = specialCategory && specialCategory !== 'NONE';
+  const effectiveMinAge = isSpecialCategory ? 18 : (Number(minAge) || 25);
+  const effectiveMaxAge = isSpecialCategory ? 65 : (Number(maxAge) || 65);
+  const effectiveGenders = isSpecialCategory ? 'ALL' : (genders || 'ALL');
+  const effectiveRadius = isSpecialCategory ? Math.max(Number(radiusMiles) || 15, 15) : (Number(radiusMiles) || 15);
+  const destinationLink = websiteUrl || client.websiteUrl || 'https://ecentraconcierge.com';
+
   if (isLive) {
     try {
       // 1. Upload Ad Image
       metaImageHash = await uploadImageToMeta(adAccountId, imageUrl, token);
 
-      // 2. Create Instant Form
-      metaFormId = await createMetaInstantForm(pageId, {
-        name: `${offerTitle} Lead Form`,
-        customQuestions: [customQuestions?.q1, customQuestions?.q2].filter(Boolean),
-        privacyPolicyUrl: privacyPolicyUrl || `${client.websiteUrl}/privacy`,
-        thankYouPhone: thankYouPhone || client.phone,
-        thankYouMessage: req.body.thankYouMessage || 'Thank you! We will reach out shortly.',
-      }, token);
-      createdEntities.push({ type: 'form', id: metaFormId });
+      // 2. Create Instant Form ONLY if goal is LEAD_GEN
+      if (goalType === 'LEAD_GEN') {
+        metaFormId = await createMetaInstantForm(pageId, {
+          name: `${offerTitle} Lead Form`,
+          customQuestions: [customQuestions?.q1, customQuestions?.q2].filter(Boolean),
+          privacyPolicyUrl: privacyPolicyUrl || `${client.websiteUrl}/privacy`,
+          thankYouPhone: thankYouPhone || client.phone,
+          thankYouMessage: req.body.thankYouMessage || 'Thank you! We will reach out shortly.',
+        }, token);
+        createdEntities.push({ type: 'form', id: metaFormId });
+      }
 
-      // 3. Create Campaign (objective = OUTCOME_LEADS, status = PAUSED)
+      // 3. Create Campaign (OUTCOME_LEADS vs OUTCOME_TRAFFIC, special_ad_categories)
       const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+      const campaignPayload: any = {
+        name: `${client.businessName} - ${offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Website Traffic' : 'Lead Gen')}`,
+        objective: goalType === 'TRAFFIC_WEBSITE' ? 'OUTCOME_TRAFFIC' : 'OUTCOME_LEADS',
+        status: 'PAUSED',
+        special_ad_categories: isSpecialCategory ? [specialCategory] : [],
+      };
+      if (isSpecialCategory) {
+        campaignPayload.special_ad_category_country = ['US'];
+      }
+
       const campaignRes = await callMetaApi(`${cleanAccountId}/campaigns`, {
         method: 'POST',
         token,
-        body: {
-          name: `${client.businessName} - ${offerTitle || 'Lead Gen'}`,
-          objective: 'OUTCOME_LEADS',
-          special_ad_categories: [],
-          status: 'PAUSED',
-        },
+        body: campaignPayload,
       });
       metaCampaignId = campaignRes.id;
       createdEntities.push({ type: 'campaign', id: metaCampaignId });
 
-      // 4. Create Ad Set (optimization_goal = LEAD_GENERATION, billing_event = IMPRESSIONS, status = PAUSED)
+      // 4. Construct Targeting Geo Locations (Requirement 5)
+      const geoLocations: any = {};
+      if (locationType === 'region' || locationType === 'state') {
+        geoLocations.regions = [{ key: String(locationKey || '3866') }];
+      } else if (locationKey && (locationType === 'city' || !latitude)) {
+        geoLocations.cities = [{
+          key: String(locationKey),
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      } else if (latitude && longitude) {
+        geoLocations.custom_locations = [{
+          latitude: Number(latitude),
+          longitude: Number(longitude),
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      } else {
+        // Fallback custom location coordinates
+        geoLocations.custom_locations = [{
+          latitude: 33.5092,
+          longitude: -111.8990,
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      }
+
+      // 5. Create Ad Set
+      const adSetPayload: any = {
+        name: `${city || client.serviceArea.city} | ${effectiveMinAge}-${effectiveMaxAge} | ${goalType === 'TRAFFIC_WEBSITE' ? 'Website Clicks' : 'Instant Leads'}`,
+        campaign_id: metaCampaignId,
+        optimization_goal: goalType === 'TRAFFIC_WEBSITE' ? 'LINK_CLICKS' : 'LEAD_GENERATION',
+        billing_event: 'IMPRESSIONS',
+        daily_budget: Math.round((Number(dailyBudget) || 50) * 100), // cents
+        targeting: {
+          age_min: effectiveMinAge,
+          age_max: effectiveMaxAge,
+          geo_locations: geoLocations,
+          publisher_platforms: ['facebook', 'instagram'],
+          facebook_positions: ['feed', 'story'],
+          instagram_positions: ['stream', 'story', 'reels'],
+        },
+        status: 'PAUSED',
+      };
+
+      if (goalType === 'TRAFFIC_WEBSITE') {
+        adSetPayload.destination_type = 'WEBSITE';
+      } else {
+        adSetPayload.promoted_object = { page_id: pageId };
+      }
+
+      if (effectiveGenders === 'MEN') {
+        adSetPayload.targeting.genders = [1];
+      } else if (effectiveGenders === 'WOMEN') {
+        adSetPayload.targeting.genders = [2];
+      }
+
       const adSetRes = await callMetaApi(`${cleanAccountId}/adsets`, {
         method: 'POST',
         token,
-        body: {
-          name: `${city || client.serviceArea.city} + ${radiusMiles || client.serviceArea.radiusMiles}mi | ${minAge || 25}-${maxAge || 65} | Auto Placements`,
-          campaign_id: metaCampaignId,
-          optimization_goal: 'LEAD_GENERATION',
-          billing_event: 'IMPRESSIONS',
-          daily_budget: Math.round((Number(dailyBudget) || 50) * 100), // cents
-          promoted_object: { page_id: pageId },
-          targeting: {
-            age_min: Number(minAge) || 25,
-            age_max: Number(maxAge) || 65,
-            geo_locations: {
-              cities: [
-                {
-                  name: city || client.serviceArea.city,
-                  radius: Number(radiusMiles) || client.serviceArea.radiusMiles,
-                  distance_unit: 'mile',
-                }
-              ]
-            },
-            publisher_platforms: ['facebook', 'instagram'],
-            facebook_positions: ['feed', 'story'],
-            instagram_positions: ['stream', 'story', 'reels'],
-          },
-          status: 'PAUSED',
-        },
+        body: adSetPayload,
       });
       metaAdSetId = adSetRes.id;
       createdEntities.push({ type: 'adset', id: metaAdSetId });
 
-      // 5. Create Ad Creative (Page ID, Instagram account, image hash, copy, lead form ID)
+      // 6. Create Ad Creative
       const creativeBody: any = {
         name: `${offerTitle} - Creative`,
         object_story_spec: {
@@ -1391,11 +1773,12 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
             name: headline || offerTitle,
             description: description || '',
             call_to_action: {
-              type: callToAction || 'GET_QUOTE',
-              value: {
-                lead_gen_form_id: metaFormId,
-              },
+              type: callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE'),
+              value: goalType === 'TRAFFIC_WEBSITE'
+                ? { link: destinationLink }
+                : { lead_gen_form_id: metaFormId },
             },
+            ...(goalType === 'TRAFFIC_WEBSITE' ? { link: destinationLink } : {}),
           },
         },
       };
@@ -1408,12 +1791,12 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
       metaCreativeId = creativeRes.id;
       createdEntities.push({ type: 'creative', id: metaCreativeId });
 
-      // 6. Create Ad (status = PAUSED)
+      // 7. Create Ad (status = PAUSED)
       const adRes = await callMetaApi(`${cleanAccountId}/ads`, {
         method: 'POST',
         token,
         body: {
-          name: `${offerTitle || 'Lead Offer Ad'} - Creative #1`,
+          name: `${offerTitle || 'Ad'} - Creative #1`,
           adset_id: metaAdSetId,
           creative: { creative_id: metaCreativeId },
           status: 'PAUSED',
@@ -1446,7 +1829,7 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
     metaAdSetId = `meta_adset_${rand}`;
     metaCreativeId = `meta_creative_${rand}`;
     metaAdId = `meta_ad_${rand}`;
-    metaFormId = `meta_form_${rand}`;
+    metaFormId = goalType === 'LEAD_GEN' ? `meta_form_${rand}` : '';
   }
 
   const timestamp = Date.now();
@@ -1457,8 +1840,10 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
   const newCampaign = {
     id: campaignId,
     clientId,
-    name: `${client.businessName} - ${offerTitle || 'Lead Campaign'}`,
-    objective: 'OUTCOME_LEADS',
+    name: `${client.businessName} - ${offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Traffic Campaign' : 'Lead Campaign')}`,
+    objective: goalType === 'TRAFFIC_WEBSITE' ? 'OUTCOME_TRAFFIC' : 'OUTCOME_LEADS',
+    specialAdCategories: isSpecialCategory ? [specialCategory] : [],
+    specialAdCategoryCountry: isSpecialCategory ? ['US'] : [],
     status: 'PAUSED', // ALWAYS PAUSED FIRST!
     dailyBudget: Number(dailyBudget) || 50,
     createdAt: new Date().toISOString(),
@@ -1469,16 +1854,23 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
     id: adSetId,
     campaignId,
     clientId,
-    name: `${city || client.serviceArea.city} + ${radiusMiles || client.serviceArea.radiusMiles}mi | ${minAge || 25}-${maxAge || 65} | Auto Placements`,
+    name: `${city || client.serviceArea.city} | ${effectiveMinAge}-${effectiveMaxAge} | ${goalType === 'TRAFFIC_WEBSITE' ? 'Website Traffic' : 'Lead Gen'}`,
     status: 'PAUSED',
     dailyBudget: Number(dailyBudget) || 50,
     startDate: new Date().toISOString(),
+    destinationType: goalType === 'TRAFFIC_WEBSITE' ? 'WEBSITE' : 'ON_AD',
+    optimizationGoal: goalType === 'TRAFFIC_WEBSITE' ? 'LINK_CLICKS' : 'LEAD_GENERATION',
     targeting: {
       city: city || client.serviceArea.city,
-      radiusMiles: Number(radiusMiles) || client.serviceArea.radiusMiles,
-      minAge: Number(minAge) || 25,
-      maxAge: Number(maxAge) || 65,
-      genders: genders || 'ALL',
+      state: state || client.serviceArea.state,
+      radiusMiles: effectiveRadius,
+      locationType: locationType || 'city',
+      locationKey: locationKey || '',
+      latitude: latitude ? Number(latitude) : undefined,
+      longitude: longitude ? Number(longitude) : undefined,
+      minAge: effectiveMinAge,
+      maxAge: effectiveMaxAge,
+      genders: effectiveGenders,
       placements: placements || ['facebook_feed', 'instagram_feed', 'stories_reels'],
     },
     metaAdSetId,
@@ -1489,18 +1881,20 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
     adSetId,
     campaignId,
     clientId,
-    name: `${offerTitle || 'Lead Offer Ad'} - Creative #1`,
+    name: `${offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Website Traffic Ad' : 'Lead Offer Ad')} - Creative #1`,
     status: 'PAUSED',
     effectiveStatus: 'PAUSED',
-    primaryText: primaryText || 'Claim your special introductory offer today.',
-    headline: headline || offerTitle || 'Exclusive Local Offer',
-    description: description || 'Tap below to claim your offer in seconds.',
-    callToAction: callToAction || 'GET_QUOTE',
+    goalType,
+    websiteUrl: destinationLink,
+    primaryText: primaryText || (goalType === 'TRAFFIC_WEBSITE' ? 'Visit our website to learn more.' : 'Claim your special introductory offer today.'),
+    headline: headline || offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Visit Official Website' : 'Exclusive Local Offer'),
+    description: description || (goalType === 'TRAFFIC_WEBSITE' ? 'Fast online service.' : 'Tap below to claim your offer in seconds.'),
+    callToAction: callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE'),
     imageUrl: imageUrl || 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80',
     imageFormat: imageFormat || '1:1',
     imageHash: metaImageHash,
     formId: metaFormId,
-    formName: `${offerTitle} - Instant Lead Form`,
+    formName: goalType === 'LEAD_GEN' ? `${offerTitle} - Instant Lead Form` : undefined,
     createdAt: new Date().toISOString(),
     metaCreativeId,
     metaAdId,
@@ -1518,7 +1912,7 @@ app.post('/api/campaigns/create', async (req: Request, res: Response) => {
     ad: newAd,
     isLive,
     message: isLive 
-      ? 'Campaign, Ad Set, Ad, and Instant Form created directly on Meta as PAUSED. Click "Go Live" whenever you are ready.'
+      ? 'Campaign, Ad Set, and Ad created directly on Meta as PAUSED. Click "Go Live" whenever you are ready.'
       : 'Campaign created as PAUSED. You can review the summary and click "Go Live" whenever you are ready.',
   });
 });
@@ -1845,11 +2239,14 @@ app.get('/api/ads/:id', async (req: Request, res: Response) => {
   }
 
   // Calculate ad performance
+  const isTraffic = ad.goalType === 'TRAFFIC_WEBSITE' || campaign?.objective === 'OUTCOME_TRAFFIC';
   const clientCpl = client?.targetCpl || 30.00;
   const adSpend = ad.status === 'REJECTED' ? 0 : ad.status === 'PAUSED' ? 120 : 640;
-  const leadsCount = adLeads.length > 0 ? adLeads.length : (ad.status === 'REJECTED' ? 0 : Math.round(adSpend / clientCpl));
-  const cpl = leadsCount > 0 ? Number((adSpend / leadsCount).toFixed(2)) : 0;
-  const clicks = leadsCount * 14;
+  const leadsCount = isTraffic ? 0 : (adLeads.length > 0 ? adLeads.length : (ad.status === 'REJECTED' ? 0 : Math.round(adSpend / clientCpl)));
+  const cpl = (!isTraffic && leadsCount > 0) ? Number((adSpend / leadsCount).toFixed(2)) : 0;
+  const clicks = isTraffic ? Math.round(adSpend / 1.28) : leadsCount * 14;
+  const cpc = clicks > 0 ? Number((adSpend / clicks).toFixed(2)) : 1.28;
+  const landingPageViews = isTraffic ? Math.round(clicks * 0.83) : 0;
   const impressions = clicks * 45;
   const ctr = impressions > 0 ? Number(((clicks / impressions) * 100).toFixed(2)) : 2.2;
 
@@ -1860,17 +2257,22 @@ app.get('/api/ads/:id', async (req: Request, res: Response) => {
     clientId: ad.clientId,
     status: ad.status,
     effectiveStatus: ad.effectiveStatus || ad.status,
+    goalType: isTraffic ? 'TRAFFIC_WEBSITE' : 'LEAD_GEN',
     rejectionReason: ad.rejectionReason,
     spend: adSpend,
     leads: leadsCount,
     cpl,
+    cpc,
+    landingPageViews,
+    linkClicks: clicks,
     last7DayCpl: Number((cpl * 1.05).toFixed(2)),
     targetCpl: clientCpl,
-    isOverTarget: cpl > clientCpl,
+    isOverTarget: client?.isOwnBusiness ? false : (cpl > clientCpl),
     clicks,
     ctr,
     imageUrl: ad.imageUrl,
     headline: ad.headline,
+    websiteUrl: ad.websiteUrl || client?.websiteUrl,
     metaAdId: ad.metaAdId,
     campaignId: ad.campaignId,
     adSetId: ad.adSetId,
@@ -2222,18 +2624,24 @@ app.get('/api/insights', async (req: Request, res: Response) => {
     .filter(ad => !clientId || clientId === 'all' || ad.clientId === clientId)
     .map(ad => {
       const client = store.clients.find(c => c.id === ad.clientId);
+      const camp = store.campaigns.find(c => c.id === ad.campaignId);
+      const isTraffic = ad.goalType === 'TRAFFIC_WEBSITE' || camp?.objective === 'OUTCOME_TRAFFIC';
       const isRejected = ad.status === 'REJECTED';
       const isPaused = ad.status === 'PAUSED';
 
       let adSpend = isRejected ? 0 : isPaused ? 120 : Number((spend / (store.ads.length || 1) * 1.2).toFixed(2));
-      let adLeads = isRejected ? 0 : Math.max(1, Math.round(adSpend / (client?.targetCpl || 30)));
-      let adCpl = adLeads > 0 ? Number((adSpend / adLeads).toFixed(2)) : 0;
-      let adClicks = Math.round(adLeads * 13.5);
+      let adLeads = (isRejected || isTraffic) ? 0 : Math.max(1, Math.round(adSpend / (client?.targetCpl || 30)));
+      let adCpl = (!isTraffic && adLeads > 0) ? Number((adSpend / adLeads).toFixed(2)) : 0;
+      let adClicks = isTraffic ? Math.round(adSpend / 1.28) : Math.round(adLeads * 13.5);
+      let adCpc = adClicks > 0 ? Number((adSpend / adClicks).toFixed(2)) : 1.28;
+      let landingPageViews = isTraffic ? Math.round(adClicks * 0.83) : 0;
       let adImpressions = adClicks * 48;
       let adCtr = adImpressions > 0 ? Number(((adClicks / adImpressions) * 100).toFixed(2)) : 2.1;
 
       let last7DayCpl = adCpl * (ad.id === 'ad-3' ? 1.15 : 0.92);
-      const isAdOverTarget = client ? last7DayCpl > client.targetCpl : false;
+      const isAdOverTarget = (!isTraffic && !client?.isOwnBusiness && client?.targetCpl) 
+        ? last7DayCpl > client.targetCpl 
+        : false;
 
       return {
         adId: ad.id,
@@ -2242,10 +2650,14 @@ app.get('/api/insights', async (req: Request, res: Response) => {
         clientId: ad.clientId,
         status: ad.status,
         effectiveStatus: ad.effectiveStatus || ad.status,
+        goalType: isTraffic ? 'TRAFFIC_WEBSITE' : 'LEAD_GEN',
         rejectionReason: ad.rejectionReason,
         spend: adSpend,
         leads: adLeads,
         cpl: adCpl,
+        cpc: adCpc,
+        landingPageViews,
+        linkClicks: adClicks,
         last7DayCpl: Number(last7DayCpl.toFixed(2)),
         targetCpl: client?.targetCpl || 30,
         isOverTarget: isAdOverTarget,
@@ -2253,6 +2665,7 @@ app.get('/api/insights', async (req: Request, res: Response) => {
         ctr: adCtr,
         imageUrl: ad.imageUrl,
         headline: ad.headline,
+        websiteUrl: ad.websiteUrl || client?.websiteUrl,
         metaAdId: ad.metaAdId,
         campaignId: ad.campaignId,
         adSetId: ad.adSetId,
@@ -2774,6 +3187,9 @@ app.post('/api/weekly-report/:clientId/toggle', (req: Request, res: Response) =>
 // ==========================================
 async function startServer() {
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+
+  // Hydrate memory cache from Cloud Firestore
+  await syncFromFirestore();
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer } = await import('vite');

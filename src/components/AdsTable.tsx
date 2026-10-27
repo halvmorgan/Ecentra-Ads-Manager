@@ -212,30 +212,66 @@ export const AdsTable: React.FC<AdsTableProps> = ({
                     {getStatusBadge(ad.status, ad.effectiveStatus, ad.rejectionReason)}
                   </td>
 
-                  {/* Cost Per Lead */}
+                  {/* Cost Per Lead or Cost Per Click */}
                   <td className="py-3.5 px-3 whitespace-nowrap">
-                    <div className="flex items-center gap-1.5">
-                      <span className={`text-sm font-bold ${
-                        isOverTarget ? 'text-red-600' : 'text-slate-900'
-                      }`}>
-                        ${ad.cpl > 0 ? ad.cpl.toFixed(2) : '0.00'}
-                      </span>
-                      {ad.cpl > 0 && (
-                        <span className={`text-[10px] font-semibold px-1 rounded ${
-                          isOverTarget ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
-                        }`}>
-                          {isOverTarget ? 'High' : 'On Target'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      Target: ${ad.targetCpl.toFixed(2)}
-                    </div>
+                    {ad.goalType === 'TRAFFIC_WEBSITE' ? (
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-sm font-bold text-slate-900">
+                            ${(ad.cpc || (ad.clicks > 0 ? ad.spend / ad.clicks : 0)).toFixed(2)}
+                          </span>
+                          <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-blue-50 text-blue-700">
+                            CPC
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          Direct Website Traffic
+                        </div>
+                      </div>
+                    ) : (
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-sm font-bold ${
+                            isOverTarget ? 'text-red-600' : 'text-slate-900'
+                          }`}>
+                            ${ad.cpl > 0 ? ad.cpl.toFixed(2) : '0.00'}
+                          </span>
+                          {ad.cpl > 0 && !ad.isOwnBusiness && (
+                            <span className={`text-[10px] font-semibold px-1 rounded ${
+                              isOverTarget ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
+                            }`}>
+                              {isOverTarget ? 'High' : 'On Target'}
+                            </span>
+                          )}
+                          {ad.isOwnBusiness && (
+                            <span className="text-[10px] font-semibold px-1 rounded bg-amber-50 text-amber-800">
+                              Own Business
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          {ad.isOwnBusiness ? 'No Target CPL' : `Target: $${ad.targetCpl.toFixed(2)}`}
+                        </div>
+                      </div>
+                    )}
                   </td>
 
-                  {/* Leads */}
-                  <td className="py-3.5 px-3 text-right whitespace-nowrap font-semibold text-slate-900 text-sm">
-                    {ad.leads}
+                  {/* Results: Leads or Link Clicks */}
+                  <td className="py-3.5 px-3 text-right whitespace-nowrap">
+                    {ad.goalType === 'TRAFFIC_WEBSITE' ? (
+                      <div>
+                        <div className="font-semibold text-slate-900 text-sm">
+                          {ad.clicks.toLocaleString()} clicks
+                        </div>
+                        <div className="text-[10px] text-slate-500">
+                          {ad.landingPageViews || Math.round(ad.clicks * 0.88)} views
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="font-semibold text-slate-900 text-sm">
+                        {ad.leads}
+                      </span>
+                    )}
                   </td>
 
                   {/* Spend */}

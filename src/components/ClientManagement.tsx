@@ -61,6 +61,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [instagramUsername, setInstagramUsername] = useState('');
   const [monthlyBudget, setMonthlyBudget] = useState(2500);
   const [targetCpl, setTargetCpl] = useState(30.00);
+  const [isOwnBusiness, setIsOwnBusiness] = useState(false);
   const [notes, setNotes] = useState('');
 
   const openAddModal = () => {
@@ -83,6 +84,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setInstagramUsername('');
     setMonthlyBudget(2500);
     setTargetCpl(30.00);
+    setIsOwnBusiness(false);
     setNotes('');
     setIsModalOpen(true);
   };
@@ -106,7 +108,8 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setPageName(c.linkedMeta.pageName || '');
     setInstagramUsername(c.linkedMeta.instagramUsername || '');
     setMonthlyBudget(c.monthlyBudget);
-    setTargetCpl(c.targetCpl);
+    setTargetCpl(c.targetCpl || 0);
+    setIsOwnBusiness(!!c.isOwnBusiness);
     setNotes(c.notes || '');
     setIsModalOpen(true);
   };
@@ -118,6 +121,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
         id: editingClient ? editingClient.id : undefined,
         businessName,
         niche,
+        isOwnBusiness,
         websiteUrl,
         serviceArea: {
           city,
@@ -128,7 +132,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
         alertEmail,
         alertPhone,
         monthlyBudget,
-        targetCpl,
+        targetCpl: isOwnBusiness ? (targetCpl || 0) : targetCpl,
         notes,
         ghlConfig: {
           locationId: ghlLocationId,
@@ -224,9 +228,16 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
             <div>
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base leading-snug">
-                    {client.businessName}
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-slate-900 text-base leading-snug">
+                      {client.businessName}
+                    </h3>
+                    {client.isOwnBusiness && (
+                      <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded-full">
+                        ★ Own Business
+                      </span>
+                    )}
+                  </div>
                   <span className="inline-block text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full mt-1">
                     {getNicheLabel(client.niche)}
                   </span>
@@ -309,7 +320,9 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                 </div>
                 <div className="border-l border-slate-700">
                   <span className="text-[10px] text-amber-400 uppercase font-semibold block">Target CPL</span>
-                  <span className="text-sm font-bold text-amber-400">${client.targetCpl.toFixed(2)}</span>
+                  <span className="text-sm font-bold text-amber-400">
+                    {client.isOwnBusiness ? 'N/A (Own)' : `$${(client.targetCpl ?? 0).toFixed(2)}`}
+                  </span>
                 </div>
               </div>
             </div>
@@ -463,6 +476,24 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                 </div>
               </div>
 
+              {/* Business Ownership Type */}
+              <div className="bg-amber-50/60 p-3 rounded-lg border border-amber-200">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isOwnBusiness}
+                    onChange={(e) => setIsOwnBusiness(e.target.checked)}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-amber-300"
+                  />
+                  <span className="text-xs font-bold text-amber-950">
+                    This is Harold's Own Business / Product (e.g. eCentury Appraisal Services)
+                  </span>
+                </label>
+                <p className="text-[11px] text-amber-800 ml-6 mt-0.5">
+                  Internal products don't require a client portal login or a target cost per lead.
+                </p>
+              </div>
+
               {/* Budget & Target CPL */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -479,16 +510,23 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
 
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    TARGET COST PER LEAD ($ USD) *
+                    TARGET COST PER LEAD ($ USD) {isOwnBusiness ? '(Optional)' : '*'}
                   </label>
                   <input
                     type="number"
                     step="0.5"
-                    value={targetCpl}
+                    disabled={isOwnBusiness}
+                    value={isOwnBusiness ? 0 : targetCpl}
                     onChange={(e) => setTargetCpl(Number(e.target.value))}
-                    className="w-full border border-amber-300 bg-amber-50/50 rounded-lg p-2 font-bold text-amber-900"
+                    className={`w-full border rounded-lg p-2 font-bold ${
+                      isOwnBusiness
+                        ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                        : 'border-amber-300 bg-amber-50/50 text-amber-900'
+                    }`}
                   />
-                  <span className="text-[10px] text-slate-500">Flags ads in red if 7-day CPL exceeds this.</span>
+                  <span className="text-[10px] text-slate-500">
+                    {isOwnBusiness ? 'N/A for own business' : 'Flags ads in red if 7-day CPL exceeds this.'}
+                  </span>
                 </div>
               </div>
 

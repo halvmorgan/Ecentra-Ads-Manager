@@ -18,8 +18,10 @@ import { ClientPortalView } from './components/ClientPortalView';
 import { BudgetModal } from './components/BudgetModal';
 import { AdDetailModal } from './components/AdDetailModal';
 import { AdEditWizard } from './components/AdEditWizard';
-import { Client, InsightsData, LeadRecord, AdStatus, AdDetailData } from './types';
-import { api } from './services/api';
+import { LoginModal } from './components/LoginModal';
+import { Client, InsightsData, LeadRecord, AdStatus, AdDetailData, UserSession } from './types';
+import { api, setClientSessionPin } from './services/api';
+import { onAuthStateChangedListener, signOutAdmin, ADMIN_EMAIL } from './services/firebase';
 
 export default function App() {
   // Navigation & Role State
@@ -27,6 +29,10 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<'overview' | 'ads' | 'clients' | 'leads' | 'settings'>('overview');
   const [selectedClientId, setSelectedClientId] = useState<string>('all');
   const [dateRange, setDateRange] = useState<string>('30d');
+
+  // Authentication & Session State
+  const [session, setSession] = useState<UserSession | null>(null);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
 
   // Data State
   const [clients, setClients] = useState<Client[]>([]);
@@ -46,6 +52,29 @@ export default function App() {
   const [weeklyReportClient, setWeeklyReportClient] = useState<Client | null>(null);
   const [budgetModal, setBudgetModal] = useState<{ clientId: string; adId: string; currentBudget: number } | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Monitor Firebase Auth State (Harold Google Sign-In)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChangedListener((user) => {
+      if (user && user.email === ADMIN_EMAIL) {
+        setSession({
+          user: {
+            uid: user.uid,
+            email: user.email,
+            displayName: user.displayName,
+            photoURL: user.photoURL,
+          },
+          isAdmin: true,
+          isClient: false,
+        });
+      } else if (!session?.isClient) {
+        // Auto-seed admin session in Demo Mode if no active session
+        // (Allows initial preview while real Google Sign-In is available via button)
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   // Check URL pathname or search params on mount
   useEffect(() => {
@@ -171,6 +200,42 @@ export default function App() {
     }
   };
 
+  const handleAdminLoginSuccess = (user: any) => {
+    setSession({
+      user: {
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName,
+        photoURL: user.photoURL,
+      },
+      isAdmin: true,
+      isClient: false,
+    });
+    setIsLoginModalOpen(false);
+    showToast(`Welcome back, Harold (${user.email})`);
+  };
+
+  const handleClientLoginSuccess = (client: Client) => {
+    setSession({
+      user: null,
+      isAdmin: false,
+      isClient: true,
+      clientId: client.id,
+      clientBusinessName: client.businessName,
+    });
+    setSelectedClientId(client.id);
+    setCurrentView('client');
+    setIsLoginModalOpen(false);
+    showToast(`Signed into Client Portal: ${client.businessName}`);
+  };
+
+  const handleLogout = async () => {
+    await signOutAdmin();
+    setClientSessionPin(null);
+    setSession(null);
+    showToast('Signed out successfully');
+  };
+
   // Active Client for Client View
   const clientForPortal = (selectedClientId && selectedClientId !== 'all')
     ? clients.find((c) => c.id === selectedClientId) || clients[0]
@@ -190,6 +255,11 @@ export default function App() {
       <Navbar
         currentView={currentView}
         onViewChange={(v) => {
+          if (session?.isClient && v === 'admin') {
+            showToast('Client access is read-only. Sign in with Google as halvmorgan@gmail.com for Admin control.');
+            setIsLoginModalOpen(true);
+            return;
+          }
           setCurrentView(v);
           if (v === 'client' && selectedClientId === 'all' && clients.length > 0) {
             setSelectedClientId(clients[0].id);
@@ -210,6 +280,9 @@ export default function App() {
         isRefreshing={isRefreshing}
         liveMode={liveMode}
         onToggleLiveMode={handleToggleLiveMode}
+        session={session}
+        onOpenLogin={() => setIsLoginModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Main Body */}
@@ -397,6 +470,15 @@ export default function App() {
           }}
         />
       )}
+
+      {/* Google Sign-In & Client Login Modal */}
+      <LoginModal
+        isOpen={isLoginModalOpen}
+        onClose={() => setIsLoginModalOpen(false)}
+        clients={clients}
+        onAdminLoginSuccess={handleAdminLoginSuccess}
+        onClientLoginSuccess={handleClientLoginSuccess}
+      />
 
       {/* Footer Branding */}
       <footer className="border-t border-slate-200 bg-white py-4 mt-auto">

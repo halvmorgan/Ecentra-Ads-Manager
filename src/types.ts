@@ -4,7 +4,12 @@ export type NicheType =
   | 'solar' 
   | 'remodeling' 
   | 'home_services' 
+  | 'appraisal_real_estate'
   | 'other';
+
+export type SpecialAdCategory = 'NONE' | 'HOUSING' | 'CREDIT' | 'EMPLOYMENT';
+
+export type AdGoalType = 'LEAD_GEN' | 'TRAFFIC_WEBSITE';
 
 export interface Client {
   id: string;
@@ -15,6 +20,10 @@ export interface Client {
     city: string;
     state: string;
     radiusMiles: number;
+    locationType?: 'city' | 'region' | 'county' | 'custom';
+    locationKey?: string;
+    latitude?: number;
+    longitude?: number;
   };
   phone: string;
   ghlConfig: {
@@ -35,7 +44,9 @@ export interface Client {
     instagramUsername?: string;
   };
   monthlyBudget: number;
-  targetCpl: number; // Target Cost Per Lead in USD
+  targetCpl?: number; // Target Cost Per Lead in USD (optional if isOwnBusiness)
+  isOwnBusiness?: boolean; // Harold's own business (no CPL needed, no client login)
+  clientAccessCode?: string; // Access PIN for read-only client login
   weeklyReportEnabled: boolean;
   createdAt: string;
   notes?: string;
@@ -55,7 +66,9 @@ export interface Campaign {
   id: string;
   clientId: string;
   name: string;
-  objective: 'OUTCOME_LEADS';
+  objective: 'OUTCOME_LEADS' | 'OUTCOME_TRAFFIC';
+  specialAdCategories?: SpecialAdCategory[];
+  specialAdCategoryCountry?: string[];
   status: 'ACTIVE' | 'PAUSED' | 'ARCHIVED';
   dailyBudget: number;
   createdAt: string;
@@ -71,9 +84,17 @@ export interface AdSet {
   dailyBudget: number;
   startDate?: string;
   endDate?: string;
+  destinationType?: 'WEBSITE' | 'ON_AD';
+  optimizationGoal?: 'LEAD_GENERATION' | 'LINK_CLICKS' | 'LANDING_PAGE_VIEWS';
   targeting: {
     city: string;
+    state?: string;
     radiusMiles: number;
+    locationType?: 'city' | 'region' | 'county' | 'custom';
+    locationKey?: string;
+    locationName?: string;
+    latitude?: number;
+    longitude?: number;
     minAge: number;
     maxAge: number;
     genders: 'ALL' | 'MEN' | 'WOMEN';
@@ -89,14 +110,16 @@ export interface AdCreative {
   clientId: string;
   name: string;
   status: AdStatus;
+  goalType?: AdGoalType;
   rejectionReason?: string;
   primaryText: string;
   headline: string;
   description: string;
-  callToAction: 'GET_QUOTE' | 'LEARN_MORE' | 'BOOK_NOW' | 'SIGN_UP' | 'CONTACT_US';
+  callToAction: 'GET_QUOTE' | 'LEARN_MORE' | 'BOOK_NOW' | 'SIGN_UP' | 'CONTACT_US' | 'SHOP_NOW' | 'BUY_NOW';
   imageUrl: string;
   imageFormat: '1:1' | '9:16';
   imageHash?: string;
+  websiteUrl?: string; // Required when goalType === 'TRAFFIC_WEBSITE'
   formId?: string;
   formName?: string;
   metaCreativeId?: string;
@@ -141,6 +164,8 @@ export interface DailyInsight {
   clicks: number;
   impressions: number;
   bookings: number;
+  landingPageViews?: number;
+  cpc?: number;
 }
 
 export interface InsightsData {
@@ -161,6 +186,7 @@ export interface InsightsData {
   reach: number;
   frequency: number;
   cpc: number;
+  landingPageViews?: number;
   dailyBreakdown: DailyInsight[];
 }
 
@@ -202,7 +228,7 @@ export interface GeneratedAdCopy {
   primaryText: string;
   headline: string;
   description: string;
-  callToAction: 'GET_QUOTE' | 'LEARN_MORE' | 'BOOK_NOW' | 'SIGN_UP' | 'CONTACT_US';
+  callToAction: 'GET_QUOTE' | 'LEARN_MORE' | 'BOOK_NOW' | 'SIGN_UP' | 'CONTACT_US' | 'SHOP_NOW' | 'BUY_NOW';
 }
 
 export interface ConnectionCheckStep {
@@ -221,10 +247,15 @@ export interface AdStatItem {
   clientName: string;
   clientId: string;
   status: AdStatus;
+  goalType?: AdGoalType;
+  isOwnBusiness?: boolean;
   rejectionReason?: string;
   spend: number;
   leads: number;
   cpl: number;
+  cpc?: number;
+  landingPageViews?: number;
+  linkClicks?: number;
   last7DayCpl: number;
   targetCpl: number;
   isOverTarget: boolean;
@@ -236,6 +267,7 @@ export interface AdStatItem {
   metaAdId?: string;
   campaignId?: string;
   adSetId?: string;
+  websiteUrl?: string;
 }
 
 export interface AdDetailData {
@@ -247,4 +279,29 @@ export interface AdDetailData {
   dailyInsights: DailyInsight[];
   leads: LeadRecord[];
   previewHtml?: string;
+}
+
+export interface GeoLocationSearchResult {
+  key: string;
+  name: string;
+  type: 'city' | 'region' | 'country' | 'custom_location';
+  country_code: string;
+  country_name?: string;
+  region?: string;
+  region_id?: string;
+  latitude?: number;
+  longitude?: number;
+}
+
+export interface UserSession {
+  user: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+    photoURL: string | null;
+  } | null;
+  isAdmin: boolean;
+  isClient: boolean;
+  clientId?: string;
+  clientBusinessName?: string;
 }

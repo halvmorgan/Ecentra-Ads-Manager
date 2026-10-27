@@ -39,11 +39,16 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
   const adSet = adDetail.adSet;
   const client = adDetail.client;
 
+  // Campaign Goal & Category
+  const isTraffic = (ad as any).goalType === 'TRAFFIC_WEBSITE' || !ad.formId;
+  const isSpecial = (ad as any).specialCategory && (ad as any).specialCategory !== 'NONE';
+  const [websiteUrl, setWebsiteUrl] = useState<string>((ad as any).websiteUrl || client?.websiteUrl || '');
+
   // Step 1: Copy
   const [primaryText, setPrimaryText] = useState(ad.primaryText || '');
   const [headline, setHeadline] = useState(ad.headline || '');
   const [description, setDescription] = useState(ad.description || '');
-  const [callToAction, setCallToAction] = useState<string>(ad.callToAction || 'GET_QUOTE');
+  const [callToAction, setCallToAction] = useState<string>(ad.callToAction || (isTraffic ? 'LEARN_MORE' : 'GET_QUOTE'));
   const [isGeneratingCopy, setIsGeneratingCopy] = useState(false);
 
   // Step 2: Creative Image
@@ -133,9 +138,9 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
       const payload = {
         budget: dailyBudget,
         city,
-        radiusMiles,
-        minAge,
-        maxAge,
+        radiusMiles: isSpecial ? Math.max(radiusMiles, 15) : radiusMiles,
+        minAge: isSpecial ? 18 : minAge,
+        maxAge: isSpecial ? 65 : maxAge,
         startDate,
         primaryText,
         headline,
@@ -143,7 +148,8 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
         callToAction,
         imageUrl,
         imageFormat,
-        formQuestions: [formQuestions],
+        websiteUrl: isTraffic ? websiteUrl : undefined,
+        formQuestions: isTraffic ? [] : [formQuestions],
         privacyPolicyUrl,
         thankYouPhone,
       };
@@ -190,7 +196,7 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
             '1. Text & Copy',
             '2. Image Creative',
             '3. Audience & Budget',
-            '4. Instant Form',
+            isTraffic ? '4. Destination' : '4. Instant Form',
             '5. Preview & Apply',
           ].map((label, idx) => {
             const stepNum = idx + 1;
@@ -405,44 +411,80 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
             </div>
           )}
 
-          {/* STEP 4: Instant Form */}
+          {/* STEP 4: Destination or Instant Form */}
           {currentStep === 4 && (
             <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Lead Form Configuration</h3>
-                <p className="text-slate-500 text-[11px]">Questions and confirmation screen settings.</p>
-              </div>
+              {isTraffic ? (
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Destination Website URL</h3>
+                    <p className="text-slate-500 text-[11px]">Direct link destination where users land when tapping the ad.</p>
+                  </div>
 
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Custom Question</label>
-                <input
-                  type="text"
-                  value={formQuestions}
-                  onChange={(e) => setFormQuestions(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg p-2"
-                />
-              </div>
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Destination URL</label>
+                    <input
+                      type="url"
+                      value={websiteUrl}
+                      onChange={(e) => setWebsiteUrl(e.target.value)}
+                      placeholder="https://example.com"
+                      className="w-full border border-slate-300 rounded-lg p-2 font-medium"
+                    />
+                  </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Privacy Policy URL</label>
-                  <input
-                    type="url"
-                    value={privacyPolicyUrl}
-                    onChange={(e) => setPrivacyPolicyUrl(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg p-2"
-                  />
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Call To Action Button</label>
+                    <select
+                      value={callToAction}
+                      onChange={(e) => setCallToAction(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg p-2 font-semibold bg-white"
+                    >
+                      <option value="LEARN_MORE">Learn More</option>
+                      <option value="SHOP_NOW">Shop Now</option>
+                      <option value="BUY_NOW">Buy Now</option>
+                      <option value="CONTACT_US">Contact Us</option>
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Thank You Phone Number</label>
-                  <input
-                    type="text"
-                    value={thankYouPhone}
-                    onChange={(e) => setThankYouPhone(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg p-2 font-semibold"
-                  />
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">Lead Form Configuration</h3>
+                    <p className="text-slate-500 text-[11px]">Questions and confirmation screen settings.</p>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Custom Question</label>
+                    <input
+                      type="text"
+                      value={formQuestions}
+                      onChange={(e) => setFormQuestions(e.target.value)}
+                      className="w-full border border-slate-300 rounded-lg p-2"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Privacy Policy URL</label>
+                      <input
+                        type="url"
+                        value={privacyPolicyUrl}
+                        onChange={(e) => setPrivacyPolicyUrl(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg p-2"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-semibold text-slate-700 mb-1">Thank You Phone Number</label>
+                      <input
+                        type="text"
+                        value={thankYouPhone}
+                        onChange={(e) => setThankYouPhone(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg p-2 font-semibold"
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 

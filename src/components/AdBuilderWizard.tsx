@@ -20,9 +20,14 @@ import {
   Instagram,
   Facebook,
   Phone,
-  Sliders
+  Sliders,
+  Lock,
+  ExternalLink,
+  Search,
+  Building,
+  Target
 } from 'lucide-react';
-import { Client, GeneratedAdCopy } from '../types';
+import { Client, GeneratedAdCopy, AdGoalType, SpecialAdCategory, GeoLocationSearchResult } from '../types';
 import { api } from '../services/api';
 
 interface AdBuilderWizardProps {
@@ -43,8 +48,11 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   // Wizard Step (1 to 6)
   const [currentStep, setCurrentStep] = useState<number>(1);
 
-  // Step 1: Client & Offer
+  // Step 1: Client, Offer & Goal
   const [selectedClientId, setSelectedClientId] = useState<string>(initialClientId || clients[0]?.id || '');
+  const [goalType, setGoalType] = useState<AdGoalType>('LEAD_GEN');
+  const [specialCategory, setSpecialCategory] = useState<SpecialAdCategory>('NONE');
+  const [websiteUrl, setWebsiteUrl] = useState<string>('');
   const [offerText, setOfferText] = useState<string>('$99 First Glow Facial + Skin Consultation (New Clients Only)');
 
   // Step 2: Ad Copy
@@ -78,6 +86,12 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   const [dailyBudget, setDailyBudget] = useState<number>(50);
   const [placements, setPlacements] = useState<string[]>(['facebook_feed', 'instagram_feed', 'stories_reels']);
 
+  // Location search (Meta Targeting Search API)
+  const [locationSearchInput, setLocationSearchInput] = useState<string>('');
+  const [locationResults, setLocationResults] = useState<GeoLocationSearchResult[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState<boolean>(false);
+  const [selectedLocation, setSelectedLocation] = useState<GeoLocationSearchResult | null>(null);
+
   // Step 5: Instant Form
   const [formQuestions, setFormQuestions] = useState<string[]>(['Full Name', 'Phone Number', 'Email']);
   const [customQuestion1, setCustomQuestion1] = useState<string>('Preferred day of week (e.g., Saturday morning)');
@@ -103,24 +117,76 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       setCity(activeClient.serviceArea.city);
       setRadiusMiles(activeClient.serviceArea.radiusMiles);
       setScrapeUrl(activeClient.websiteUrl);
+      setWebsiteUrl(activeClient.websiteUrl);
       setPrivacyPolicyUrl(`${activeClient.websiteUrl}/privacy-policy`);
       setThankYouPhone(activeClient.phone);
 
-      if (activeClient.niche === 'water_mold') {
+      if (activeClient.isOwnBusiness || activeClient.niche === 'appraisal_real_estate') {
+        setSpecialCategory('HOUSING');
+        setGoalType('TRAFFIC_WEBSITE');
+        setOfferText('Fast Certified Real Estate Appraisal & Home Valuation Reports');
+        setImagePrompt('Modern residential property with licensed Michigan real estate appraisal documents');
+        setCallToAction('LEARN_MORE');
+        setCity(activeClient.serviceArea.city || 'Detroit');
+        setSelectedLocation({
+          key: '3866',
+          name: 'Michigan',
+          type: 'region',
+          country_code: 'US',
+        });
+      } else if (activeClient.niche === 'water_mold') {
+        setSpecialCategory('NONE');
+        setGoalType('LEAD_GEN');
         setOfferText('Free 60-Minute Emergency Mold & Moisture Audit');
         setImagePrompt('Courteous restoration inspector with moisture meter assessing drywall in clean home');
         setCallToAction('GET_QUOTE');
       } else if (activeClient.niche === 'med_spa') {
+        setSpecialCategory('NONE');
+        setGoalType('LEAD_GEN');
         setOfferText('$99 First Glow Facial + Skin Consultation');
         setImagePrompt('Warm, tranquil treatment room with aesthetician in Scottsdale boutique med spa');
         setCallToAction('BOOK_NOW');
       } else if (activeClient.niche === 'solar') {
+        setSpecialCategory('CREDIT'); // solar financing options
+        setGoalType('LEAD_GEN');
         setOfferText('Free Home Solar Utility Savings Analysis');
         setImagePrompt('Modern residential home with clean solar panels under blue sky in Colorado');
         setCallToAction('LEARN_MORE');
       }
     }
   }, [activeClient]);
+
+  // Handle Meta Location Autocomplete
+  const handleSearchLocations = async (query: string) => {
+    setLocationSearchInput(query);
+    if (!query || query.trim().length < 2) {
+      setLocationResults([]);
+      return;
+    }
+    setIsSearchingLocation(true);
+    try {
+      const results = await api.searchLocations(query);
+      setLocationResults(results);
+    } catch (e) {
+      console.warn('Location search error:', e);
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleSelectLocationResult = (loc: GeoLocationSearchResult) => {
+    setSelectedLocation(loc);
+    setCity(loc.name);
+    setLocationSearchInput('');
+    setLocationResults([]);
+  };
+
+  // Special category rules enforcement
+  const isSpecial = specialCategory !== 'NONE';
+  const effectiveMinAge = isSpecial ? 18 : minAge;
+  const effectiveMaxAge = isSpecial ? 65 : maxAge;
+  const effectiveGenders = isSpecial ? 'ALL' : genders;
+  const effectiveRadius = isSpecial ? Math.max(radiusMiles, 15) : radiusMiles;
 
   // Trigger Gemini Copywriting
   const handleGenerateCopy = async () => {
@@ -200,17 +266,24 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
         primaryText,
         headline,
         description,
-        callToAction,
+        callToAction: goalType === 'TRAFFIC_WEBSITE' ? (callToAction || 'LEARN_MORE') : callToAction,
         imageUrl: selectedImageUrl,
         imageFormat,
         city,
-        radiusMiles,
-        minAge,
-        maxAge,
-        genders,
+        radiusMiles: effectiveRadius,
+        locationType: selectedLocation?.type || 'city',
+        locationKey: selectedLocation?.key,
+        latitude: selectedLocation?.latitude,
+        longitude: selectedLocation?.longitude,
+        minAge: effectiveMinAge,
+        maxAge: effectiveMaxAge,
+        genders: effectiveGenders,
         placements,
         dailyBudget,
-        formQuestions: [...formQuestions, customQuestion1, customQuestion2].filter(Boolean),
+        goalType,
+        specialCategory,
+        websiteUrl: websiteUrl || activeClient.websiteUrl,
+        formQuestions: goalType === 'LEAD_GEN' ? [...formQuestions, customQuestion1, customQuestion2].filter(Boolean) : [],
         privacyPolicyUrl,
         thankYouPhone,
         thankYouMessage,
@@ -282,7 +355,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
               '2. Ad Copy',
               '3. Creative Image',
               '4. Audience & Budget',
-              '5. Lead Form',
+              goalType === 'TRAFFIC_WEBSITE' ? '5. Destination' : '5. Lead Form',
               '6. Review & Launch',
             ].map((stepLabel, idx) => {
               const stepNum = idx + 1;
@@ -346,7 +419,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   >
                     {clients.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.businessName} ({c.serviceArea.city}, {c.serviceArea.state} • Niche: {c.niche})
+                        {c.businessName} {c.isOwnBusiness ? '★ (My Own Business)' : `(${c.serviceArea.city}, ${c.serviceArea.state} • ${c.niche})`}
                       </option>
                     ))}
                   </select>
@@ -354,32 +427,152 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
 
                 {activeClient && (
                   <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-xs space-y-1.5">
-                    <div className="flex justify-between">
+                    <div className="flex justify-between items-center">
                       <span className="text-slate-500">Service Area:</span>
                       <span className="font-semibold text-slate-800">
                         {activeClient.serviceArea.city}, {activeClient.serviceArea.state} ({activeClient.serviceArea.radiusMiles} mi radius)
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Target CPL:</span>
-                      <span className="font-semibold text-emerald-700">${activeClient.targetCpl.toFixed(2)} / lead</span>
-                    </div>
-                    <div className="flex justify-between">
+                    {!activeClient.isOwnBusiness && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Target Cost Per Lead:</span>
+                        <span className="font-semibold text-emerald-700">${(activeClient.targetCpl ?? 0).toFixed(2)} / lead</span>
+                      </div>
+                    )}
+                    {activeClient.isOwnBusiness && (
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Business Type:</span>
+                        <span className="font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                          My Own Product / Business (No Target CPL / Client Login)
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between items-center">
                       <span className="text-slate-500">Linked Ad Account:</span>
                       <span className="font-semibold text-slate-800">
                         {activeClient.linkedMeta.adAccountName || 'Direct Business Manager Partner'}
                       </span>
                     </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Card on File:</span>
-                      <span className="font-semibold text-slate-800">Client pays Meta directly (Amex/Visa)</span>
-                    </div>
                   </div>
                 )}
 
+                {/* AD GOAL SELECTION */}
+                <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                  <label className="block text-xs font-bold text-slate-800 uppercase mb-2">
+                    Campaign Goal
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setGoalType('LEAD_GEN')}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                        goalType === 'LEAD_GEN'
+                          ? 'border-amber-600 bg-amber-50/50 ring-1 ring-amber-500/20'
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <FileText className="w-4 h-4 text-amber-600" />
+                          Get leads (Facebook form)
+                        </span>
+                        {goalType === 'LEAD_GEN' && <Check className="w-4 h-4 text-amber-600" />}
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-snug">
+                        Meta Instant Form pre-filled with phone & email. Best for med spas & home services.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setGoalType('TRAFFIC_WEBSITE')}
+                      className={`p-3 rounded-lg border text-left transition-all cursor-pointer ${
+                        goalType === 'TRAFFIC_WEBSITE'
+                          ? 'border-amber-600 bg-amber-50/50 ring-1 ring-amber-500/20'
+                          : 'border-slate-200 hover:border-slate-300 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                          <ExternalLink className="w-4 h-4 text-amber-600" />
+                          Send people to my website
+                        </span>
+                        {goalType === 'TRAFFIC_WEBSITE' && <Check className="w-4 h-4 text-amber-600" />}
+                      </div>
+                      <p className="text-[11px] text-slate-500 leading-snug">
+                        OUTCOME_TRAFFIC clicks straight to your landing page or booking portal.
+                      </p>
+                    </button>
+                  </div>
+
+                  {goalType === 'TRAFFIC_WEBSITE' && (
+                    <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                          Destination Website URL
+                        </label>
+                        <input
+                          type="url"
+                          value={websiteUrl}
+                          onChange={(e) => setWebsiteUrl(e.target.value)}
+                          placeholder="https://ecenturyappraisals.com"
+                          className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800 focus:ring-1 focus:ring-amber-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-semibold text-slate-700 uppercase mb-1">
+                          Call To Action Button
+                        </label>
+                        <select
+                          value={callToAction}
+                          onChange={(e) => setCallToAction(e.target.value)}
+                          className="w-full text-xs border border-slate-300 rounded-lg p-2 font-semibold text-slate-800 bg-white"
+                        >
+                          <option value="LEARN_MORE">Learn More</option>
+                          <option value="SHOP_NOW">Shop Now</option>
+                          <option value="BUY_NOW">Buy Now</option>
+                          <option value="CONTACT_US">Contact Us</option>
+                        </select>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* SPECIAL AD CATEGORY */}
+                <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-800 uppercase">
+                      Special Ad Category
+                    </label>
+                    <span className="text-[10px] text-slate-400">Meta Policy Compliance</span>
+                  </div>
+                  <select
+                    value={specialCategory}
+                    onChange={(e) => setSpecialCategory(e.target.value as SpecialAdCategory)}
+                    className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800 bg-white"
+                  >
+                    <option value="NONE">None (General business / services)</option>
+                    <option value="HOUSING">Housing (Real Estate, appraisals, mortgage, listings)</option>
+                    <option value="CREDIT">Credit (Credit cards, auto loans, personal financing)</option>
+                    <option value="EMPLOYMENT">Employment (Job offers, recruitment, hiring)</option>
+                  </select>
+
+                  {specialCategory !== 'NONE' && (
+                    <div className="mt-2.5 bg-amber-50 border border-amber-200 rounded-lg p-2.5 text-xs text-amber-900 flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="text-[11px] leading-relaxed">
+                        <strong className="font-semibold block text-amber-950">
+                          {specialCategory} Category Rules Enforced by Meta:
+                        </strong>
+                        Federal non-discrimination guidelines require broad targeting: age is locked to <strong>18–65+</strong>, gender is locked to <strong>All</strong>, minimum radius is <strong>15 miles</strong>, and ZIP code targeting is strictly disallowed.
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1.5">
-                    Describe the Offer (Plain English)
+                    Describe the Offer / Focus (Plain English)
                   </label>
                   <input
                     type="text"
@@ -389,7 +582,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     className="w-full text-sm border border-slate-300 rounded-lg p-2.5 font-medium text-slate-900 focus:ring-2 focus:ring-amber-500/20"
                   />
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Keep it specific to local newcomers. Avoid exaggerated claims or medical promises.
+                    Keep it specific to local prospects. Avoid exaggerated claims or medical promises.
                   </p>
                 </div>
               </div>
@@ -704,63 +897,112 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   Step 4: Local Audience Targeting & Budget
                 </h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Broad local radius targeting around client's physical location.
+                  Meta Targeting API geolocation lookup & compliance controls.
                 </p>
+              </div>
+
+              {/* LOCATION TARGETING WITH META SEARCH API */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-900 uppercase">
+                    Meta Ad Geolocation Targeting
+                  </label>
+                  <span className="text-[10px] text-slate-500">Targeting Search API (search?type=adgeolocation)</span>
+                </div>
+
+                <div className="relative">
+                  <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-lg px-3 py-2 focus-within:ring-2 focus-within:ring-amber-500/20">
+                    <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={locationSearchInput}
+                      onChange={(e) => handleSearchLocations(e.target.value)}
+                      placeholder="Search city, state (e.g. Michigan), or county..."
+                      className="w-full text-xs font-medium text-slate-800 bg-transparent outline-none"
+                    />
+                    {isSearchingLocation && (
+                      <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />
+                    )}
+                  </div>
+
+                  {/* Search Autocomplete Results Dropdown */}
+                  {locationResults.length > 0 && (
+                    <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-300 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationResults.map((loc) => (
+                        <div
+                          key={`${loc.type}-${loc.key}`}
+                          onClick={() => handleSelectLocationResult(loc)}
+                          className="px-3 py-2 hover:bg-amber-50 cursor-pointer border-b border-slate-100 last:border-0 flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <span className="font-semibold text-slate-800">{loc.name}</span>
+                            <span className="text-slate-400 text-[11px] ml-1.5">
+                              {loc.region ? `${loc.region}, ` : ''}{loc.country_code}
+                            </span>
+                          </div>
+                          <span className="text-[10px] px-2 py-0.5 rounded uppercase font-semibold bg-slate-100 text-slate-600">
+                            {loc.type === 'region' ? 'State / Region' : loc.type}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected Location Pill */}
+                {selectedLocation ? (
+                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold text-emerald-950">{selectedLocation.name}</span>
+                        <span className="text-emerald-700 text-[11px] ml-1.5">
+                          (Meta {selectedLocation.type.toUpperCase()} Key: #{selectedLocation.key})
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedLocation(null);
+                        setCity(activeClient.serviceArea.city);
+                      }}
+                      className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : (
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Defaulting to client city: <strong>{city || activeClient?.serviceArea.city}</strong></span>
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Target City / Metro
+                    Radius Around Location (Miles)
                   </label>
-                  <div className="flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
-                    <input
-                      type="text"
-                      value={city}
-                      onChange={(e) => setCity(e.target.value)}
-                      className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Radius (Miles)
-                  </label>
-                  <input
-                    type="number"
-                    value={radiusMiles}
-                    onChange={(e) => setRadiusMiles(Number(e.target.value))}
-                    min={5}
-                    max={50}
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 font-semibold text-slate-800"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                    Age Range
-                  </label>
-                  <div className="flex items-center gap-2">
+                  <div className="relative">
                     <input
                       type="number"
-                      value={minAge}
-                      onChange={(e) => setMinAge(Number(e.target.value))}
-                      min={18}
-                      max={65}
-                      className="w-20 text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
+                      value={effectiveRadius}
+                      disabled={isSpecial && radiusMiles < 15}
+                      onChange={(e) => setRadiusMiles(Math.max(Number(e.target.value), isSpecial ? 15 : 5))}
+                      min={isSpecial ? 15 : 5}
+                      max={50}
+                      className={`w-full text-xs border rounded-lg p-2 font-semibold text-slate-800 ${
+                        isSpecial ? 'bg-amber-50/40 border-amber-300' : 'border-slate-300'
+                      }`}
                     />
-                    <span className="text-slate-400">to</span>
-                    <input
-                      type="number"
-                      value={maxAge}
-                      onChange={(e) => setMaxAge(Number(e.target.value))}
-                      min={21}
-                      max={65}
-                      className="w-20 text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
-                    />
-                    <span className="text-xs text-slate-500">years old</span>
+                    {isSpecial && (
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-700 font-medium">
+                        <Lock className="w-3 h-3" />
+                        <span>Min 15-mile radius required for {specialCategory} category</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -768,15 +1010,64 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
                     Gender Targeting
                   </label>
-                  <select
-                    value={genders}
-                    onChange={(e) => setGenders(e.target.value as any)}
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
-                  >
-                    <option value="ALL">All Genders (Recommended)</option>
-                    <option value="WOMEN">Women Only</option>
-                    <option value="MEN">Men Only</option>
-                  </select>
+                  <div className="relative">
+                    <select
+                      value={effectiveGenders}
+                      disabled={isSpecial}
+                      onChange={(e) => setGenders(e.target.value as any)}
+                      className={`w-full text-xs border rounded-lg p-2 font-medium text-slate-800 ${
+                        isSpecial ? 'bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200' : 'border-slate-300 bg-white'
+                      }`}
+                    >
+                      <option value="ALL">All Genders (Recommended)</option>
+                      <option value="WOMEN">Women Only</option>
+                      <option value="MEN">Men Only</option>
+                    </select>
+                    {isSpecial && (
+                      <div className="mt-1 flex items-center gap-1 text-[10px] text-amber-700 font-medium">
+                        <Lock className="w-3 h-3" />
+                        <span>Gender restrictions disabled for {specialCategory} category</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                    Age Range
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={effectiveMinAge}
+                      disabled={isSpecial}
+                      onChange={(e) => setMinAge(Number(e.target.value))}
+                      min={18}
+                      max={65}
+                      className={`w-20 text-xs border rounded-lg p-2 font-medium text-slate-800 ${
+                        isSpecial ? 'bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200' : 'border-slate-300'
+                      }`}
+                    />
+                    <span className="text-slate-400">to</span>
+                    <input
+                      type="number"
+                      value={effectiveMaxAge}
+                      disabled={isSpecial}
+                      onChange={(e) => setMaxAge(Number(e.target.value))}
+                      min={21}
+                      max={65}
+                      className={`w-20 text-xs border rounded-lg p-2 font-medium text-slate-800 ${
+                        isSpecial ? 'bg-slate-100 text-slate-500 cursor-not-allowed border-slate-200' : 'border-slate-300'
+                      }`}
+                    />
+                    <span className="text-xs text-slate-500">years old</span>
+                    {isSpecial && (
+                      <span className="text-[11px] text-amber-700 font-medium flex items-center gap-1 ml-2">
+                        <Lock className="w-3.5 h-3.5" />
+                        <span>Locked to 18–65+ for compliance</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -822,7 +1113,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
 
                 <div className="border-t border-slate-200 pt-3 flex flex-wrap items-center justify-between text-xs text-slate-600 gap-2">
                   <div>
-                    Projected 30-Day Spend: <strong className="text-slate-900">${projectedMonthlySpend.toLocaleString()}</strong>
+                    Projected 30-Day Spend: <strong className="text-slate-900">${(dailyBudget * 30).toLocaleString()}</strong>
                   </div>
                   <div>
                     Client Total Monthly Budget: <strong className="text-slate-900">${activeClient?.monthlyBudget.toLocaleString() || '0'}</strong>
@@ -832,102 +1123,172 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
             </div>
           )}
 
-          {/* STEP 5: INSTANT LEAD FORM */}
+          {/* STEP 5: INSTANT FORM OR DIRECT WEBSITE DESTINATION */}
           {currentStep === 5 && (
             <div className="space-y-5">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  Step 5: Facebook & Instagram Instant Form
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Native Meta form for zero friction. Direct phone & email pre-fill.
-                </p>
-              </div>
+              {goalType === 'TRAFFIC_WEBSITE' ? (
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                      <ExternalLink className="w-5 h-5 text-amber-600" />
+                      Step 5: Direct Website Traffic Destination
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      No Meta Instant Form required. Prospective clients click through directly to your landing page.
+                    </p>
+                  </div>
 
-              {/* Standard Fields */}
-              <div className="space-y-3">
-                <span className="text-xs font-semibold text-slate-700 uppercase block">
-                  Contact Information Fields (Pre-Filled by Meta)
-                </span>
-                <div className="grid grid-cols-3 gap-2 text-xs">
-                  {['Full Name', 'Phone Number', 'Email Address'].map((f) => (
-                    <div key={f} className="p-2.5 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200 flex items-center gap-1.5">
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      {f}
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 space-y-3">
+                    <div className="flex items-start gap-3">
+                      <div className="w-8 h-8 rounded-full bg-emerald-600 text-white flex items-center justify-center shrink-0 font-bold text-sm">
+                        ✓
+                      </div>
+                      <div>
+                        <div className="text-xs font-bold text-emerald-950 uppercase">
+                          Website Traffic Setup Ready
+                        </div>
+                        <p className="text-xs text-emerald-800 mt-0.5 leading-relaxed">
+                          When users tap your ad, Meta directs them straight to your designated website URL. Optimization goal is set to <strong>LINK_CLICKS</strong> and results will show clicks, landing page views, and cost-per-click (CPC).
+                        </p>
+                      </div>
                     </div>
-                  ))}
-                </div>
-              </div>
 
-              {/* Custom Questions */}
-              <div className="space-y-3">
-                <span className="text-xs font-semibold text-slate-700 uppercase block">
-                  1-2 Custom Qualification Questions
-                </span>
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Question 1
-                  </label>
-                  <input
-                    type="text"
-                    value={customQuestion1}
-                    onChange={(e) => setCustomQuestion1(e.target.value)}
-                    placeholder="e.g. Preferred appointment time (Morning / Afternoon)"
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                    Question 2
-                  </label>
-                  <input
-                    type="text"
-                    value={customQuestion2}
-                    onChange={(e) => setCustomQuestion2(e.target.value)}
-                    placeholder="e.g. What is your primary project or service goal?"
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
-                  />
-                </div>
-              </div>
+                    <div className="bg-white p-3 rounded-lg border border-emerald-200 text-xs space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Destination URL:</span>
+                        <a
+                          href={websiteUrl || activeClient.websiteUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-bold text-amber-700 hover:underline flex items-center gap-1"
+                        >
+                          {websiteUrl || activeClient.websiteUrl}
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Call to Action:</span>
+                        <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded text-[11px]">
+                          {callToAction}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-500">Destination Type:</span>
+                        <span className="font-bold text-slate-800">WEBSITE (No Leadgen Form)</span>
+                      </div>
+                    </div>
+                  </div>
 
-              {/* Privacy Policy & Thank You Screen */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Privacy Policy URL
-                  </label>
-                  <input
-                    type="url"
-                    value={privacyPolicyUrl}
-                    onChange={(e) => setPrivacyPolicyUrl(e.target.value)}
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-800"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
+                      Confirm or Edit Destination URL
+                    </label>
+                    <input
+                      type="url"
+                      value={websiteUrl}
+                      onChange={(e) => setWebsiteUrl(e.target.value)}
+                      placeholder="https://example.com/services"
+                      className="w-full text-xs border border-slate-300 rounded-lg p-2.5 font-medium text-slate-800"
+                    />
+                  </div>
                 </div>
+              ) : (
+                <div className="space-y-5">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Step 5: Facebook & Instagram Instant Form
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Native Meta form for zero friction. Direct phone & email pre-fill.
+                    </p>
+                  </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    Client Direct Phone (Thank You Screen)
-                  </label>
-                  <input
-                    type="text"
-                    value={thankYouPhone}
-                    onChange={(e) => setThankYouPhone(e.target.value)}
-                    className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-800 font-semibold"
-                  />
+                  {/* Standard Fields */}
+                  <div className="space-y-3">
+                    <span className="text-xs font-semibold text-slate-700 uppercase block">
+                      Contact Information Fields (Pre-Filled by Meta)
+                    </span>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {['Full Name', 'Phone Number', 'Email Address'].map((f) => (
+                        <div key={f} className="p-2.5 rounded-lg bg-slate-100 text-slate-800 font-semibold border border-slate-200 flex items-center gap-1.5">
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          {f}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Custom Questions */}
+                  <div className="space-y-3">
+                    <span className="text-xs font-semibold text-slate-700 uppercase block">
+                      1-2 Custom Qualification Questions
+                    </span>
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Question 1
+                      </label>
+                      <input
+                        type="text"
+                        value={customQuestion1}
+                        onChange={(e) => setCustomQuestion1(e.target.value)}
+                        placeholder="e.g. Preferred appointment time (Morning / Afternoon)"
+                        className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Question 2
+                      </label>
+                      <input
+                        type="text"
+                        value={customQuestion2}
+                        onChange={(e) => setCustomQuestion2(e.target.value)}
+                        placeholder="e.g. What is your primary project or service goal?"
+                        className="w-full text-xs border border-slate-300 rounded-lg p-2 font-medium text-slate-800"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Privacy Policy & Thank You Screen */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Privacy Policy URL
+                      </label>
+                      <input
+                        type="url"
+                        value={privacyPolicyUrl}
+                        onChange={(e) => setPrivacyPolicyUrl(e.target.value)}
+                        className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        Client Direct Phone (Thank You Screen)
+                      </label>
+                      <input
+                        type="text"
+                        value={thankYouPhone}
+                        onChange={(e) => setThankYouPhone(e.target.value)}
+                        className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-800 font-semibold"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                      Thank You Completion Message
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={thankYouMessage}
+                      onChange={(e) => setThankYouMessage(e.target.value)}
+                      className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-700"
+                    />
+                  </div>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  Thank You Completion Message
-                </label>
-                <textarea
-                  rows={2}
-                  value={thankYouMessage}
-                  onChange={(e) => setThankYouMessage(e.target.value)}
-                  className="w-full text-xs border border-slate-300 rounded-lg p-2 text-slate-700"
-                />
-              </div>
+              )}
             </div>
           )}
 
