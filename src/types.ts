@@ -125,8 +125,27 @@ export interface AdCreative {
   imageMethod?: 'uploaded' | 'url';
   imageDeliveryLabel?: string;
   websiteUrl?: string; // Required when goalType === 'TRAFFIC_WEBSITE'
+  specialCategory?: SpecialAdCategory;
+  city?: string;
+  state?: string;
+  radiusMiles?: number;
+  locationType?: string;
+  locationKey?: string;
+  latitude?: number;
+  longitude?: number;
+  minAge?: number;
+  maxAge?: number;
+  genders?: 'ALL' | 'MEN' | 'WOMEN';
+  placements?: string[];
+  dailyBudget?: number;
+  metaCampaignId?: string;
+  metaAdSetId?: string;
   formId?: string;
   formName?: string;
+  formQuestions?: string[];
+  privacyPolicyUrl?: string;
+  thankYouPhone?: string;
+  thankYouMessage?: string;
   metaCreativeId?: string;
   metaAdId?: string;
   createdAt: string;
