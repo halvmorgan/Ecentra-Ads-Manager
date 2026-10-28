@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { 
   Building2, 
   Plus, 
@@ -22,7 +22,9 @@ import {
   KeyRound,
   Copy,
   RotateCcw,
-  Check
+  Check,
+  Download,
+  Upload
 } from 'lucide-react';
 import { Client, NicheType } from '../types';
 import { api } from '../services/api';
@@ -33,6 +35,8 @@ interface ClientManagementProps {
   onRefreshClients: () => void;
   onOpenWeeklyReport: (client: Client) => void;
   onSelectClientForAds: (clientId: string) => void;
+  dbError?: string | null;
+  isDbPermanent?: boolean;
 }
 
 export const ClientManagement: React.FC<ClientManagementProps> = ({
@@ -40,6 +44,8 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   onRefreshClients,
   onOpenWeeklyReport,
   onSelectClientForAds,
+  dbError,
+  isDbPermanent,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
@@ -48,6 +54,86 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [isTestingLead, setIsTestingLead] = useState(false);
   const [copiedClientId, setCopiedClientId] = useState<string | null>(null);
   const [resettingClientId, setResettingClientId] = useState<string | null>(null);
+
+  // Export / Import State
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [backupNotice, setBackupNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const handleExportClients = async () => {
+    setIsExporting(true);
+    setBackupNotice(null);
+    try {
+      const data = await api.exportClients();
+      const jsonStr = JSON.stringify(data.clients, null, 2);
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `ecentra_clients_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setBackupNotice({
+        type: 'success',
+        text: `Exported ${data.clients.length} client account(s) to JSON backup file successfully.`,
+      });
+      setTimeout(() => setBackupNotice(null), 5000);
+    } catch (err: any) {
+      setBackupNotice({
+        type: 'error',
+        text: 'Export failed: ' + (err.message || 'Unknown error'),
+      });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleFileImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsImporting(true);
+    setBackupNotice(null);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text);
+        const clientsToImport = Array.isArray(parsed) ? parsed : parsed.clients;
+        if (!Array.isArray(clientsToImport) || clientsToImport.length === 0) {
+          throw new Error('No valid client array found in JSON file.');
+        }
+
+        const res = await api.importClients(clientsToImport);
+        setBackupNotice({
+          type: 'success',
+          text: res.message || `Restored ${res.count} clients without duplicates.`,
+        });
+        onRefreshClients();
+        setTimeout(() => setBackupNotice(null), 6000);
+      } catch (err: any) {
+        setBackupNotice({
+          type: 'error',
+          text: 'Import failed: ' + (err.message || 'Invalid JSON file format'),
+        });
+      } finally {
+        setIsImporting(false);
+        if (event.target) event.target.value = '';
+      }
+    };
+    reader.onerror = () => {
+      setIsImporting(false);
+      setBackupNotice({
+        type: 'error',
+        text: 'Failed to read the selected backup file.',
+      });
+      if (event.target) event.target.value = '';
+    };
+    reader.readAsText(file);
+  };
 
   const handleCopyAccessCode = (client: Client) => {
     if (!client.clientAccessCode) return;
@@ -241,22 +327,161 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={openAddModal}
-          className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
-        >
-          <Plus className="w-4 h-4 text-amber-400" />
-          <span>Add New Client</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Hidden File Input for Client Backup JSON */}
+          <input
+            type="file"
+            ref={fileInputRef}
+            onChange={handleFileImport}
+            accept=".json,application/json"
+            className="hidden"
+          />
+
+          <button
+            onClick={handleExportClients}
+            disabled={isExporting || clients.length === 0}
+            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Download JSON backup file of all clients"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-500" />
+            <span>{isExporting ? 'Exporting...' : 'Export Clients'}</span>
+          </button>
+
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isImporting}
+            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Restore clients from JSON backup file without creating duplicates"
+          >
+            <Upload className="w-3.5 h-3.5 text-slate-500" />
+            <span>{isImporting ? 'Importing...' : 'Import Clients'}</span>
+          </button>
+
+          <button
+            onClick={openAddModal}
+            className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+          >
+            <Plus className="w-4 h-4 text-amber-400" />
+            <span>Add New Client</span>
+          </button>
+        </div>
       </div>
 
-      {/* Clients Cards Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {clients.map((client) => (
-          <div
-            key={client.id}
-            className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col justify-between hover:shadow-sm transition-all"
+      {/* Backup Import/Export Status Toast */}
+      {backupNotice && (
+        <div className={`p-3 rounded-lg text-xs flex items-center justify-between border ${
+          backupNotice.type === 'success' 
+            ? 'bg-emerald-50 border-emerald-200 text-emerald-900' 
+            : 'bg-red-50 border-red-200 text-red-900'
+        }`}>
+          <div className="flex items-center gap-2">
+            {backupNotice.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            )}
+            <span>{backupNotice.text}</span>
+          </div>
+          <button
+            onClick={() => setBackupNotice(null)}
+            className="text-xs font-bold hover:underline ml-3"
           >
+            Dismiss
+          </button>
+        </div>
+      )}
+
+      {/* Requirement 5: Clear Red Error Message if Database Cannot Be Reached */}
+      {(dbError || isDbPermanent === false) && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 text-red-900 shadow-xs flex items-start gap-3">
+          <div className="w-8 h-8 rounded-full bg-red-100 border border-red-200 flex items-center justify-center shrink-0 text-red-600 mt-0.5">
+            <AlertCircle className="w-5 h-5" />
+          </div>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-xs font-bold text-red-950 uppercase tracking-wide">
+                Database Connection Error
+              </h3>
+              <span className="text-[10px] bg-red-200 text-red-900 px-1.5 py-0.5 rounded font-mono font-semibold">
+                Permanent Firestore Storage Unreachable
+              </span>
+            </div>
+            <p className="text-xs text-red-800 mt-1 leading-relaxed">
+              {dbError || 'Could not verify permanent Cloud Firestore storage. Client records could not be loaded from persistent storage. Never showing an empty client list.'}
+            </p>
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                onClick={onRefreshClients}
+                className="bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold px-2.5 py-1 rounded-md flex items-center gap-1 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Retry Database Connection</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clients Cards Grid */}
+      {clients.length === 0 ? (
+        (dbError || isDbPermanent === false) ? (
+          <div className="bg-red-50/50 border-2 border-red-200 rounded-xl p-10 text-center space-y-3">
+            <AlertCircle className="w-10 h-10 text-red-500 mx-auto" />
+            <h3 className="text-sm font-bold text-red-900">
+              Unable to reach persistent database
+            </h3>
+            <p className="text-xs text-red-700 max-w-md mx-auto leading-relaxed">
+              Your saved client records could not be loaded from Cloud Firestore. We are not displaying an empty list as if you have no clients. Please retry the connection or restore from a JSON backup.
+            </p>
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                onClick={onRefreshClients}
+                className="bg-red-600 hover:bg-red-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Retry Connection</span>
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-slate-500" />
+                <span>Import Backup</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-white border border-slate-200 rounded-xl p-10 text-center space-y-2">
+            <Building2 className="w-8 h-8 text-slate-400 mx-auto" />
+            <h3 className="text-sm font-bold text-slate-800">No client accounts configured yet</h3>
+            <p className="text-xs text-slate-500 max-w-md mx-auto">
+              Add your first client partner or restore from an existing JSON backup file.
+            </p>
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                onClick={openAddModal}
+                className="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5 text-amber-400" />
+                <span>Add Client</span>
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+              >
+                <Upload className="w-3.5 h-3.5 text-slate-500" />
+                <span>Import Backup</span>
+              </button>
+            </div>
+          </div>
+        )
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {clients.map((client) => (
+            <div
+              key={client.id}
+              className="bg-white rounded-xl border border-slate-200 shadow-xs p-5 flex flex-col justify-between hover:shadow-sm transition-all"
+            >
             <div>
               <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
@@ -442,6 +667,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
           </div>
         ))}
       </div>
+      )}
 
       {/* Feedback Toast if test lead run */}
       {testLeadFeedback && (

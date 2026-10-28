@@ -169,6 +169,28 @@ export const api = {
     return data;
   },
 
+  async exportClients() {
+    const headers = await getHeaders();
+    const res = await fetch('/api/clients/export', { headers });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to export clients');
+    }
+    return res.json() as Promise<{ version: string; exportedAt: string; clientCount: number; clients: Client[] }>;
+  },
+
+  async importClients(clients: Partial<Client>[]) {
+    const headers = await getHeaders();
+    const res = await fetch('/api/clients/import', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ clients }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to import clients');
+    return data as { success: boolean; message: string; count: number; added: number; updated: number; clients: Client[] };
+  },
+
   async simulateLead(payload: { 
     clientId: string; 
     adId?: string; 

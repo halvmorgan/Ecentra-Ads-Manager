@@ -119,8 +119,9 @@ export default function App() {
       } else {
         setStorageError(null);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to load application data:', err);
+      setStorageError(err.message || 'Database unreachable');
     } finally {
       setIsRefreshing(false);
     }
@@ -396,6 +397,8 @@ export default function App() {
                 setSelectedClientId(cId);
                 setActiveTab('ads');
               }}
+              dbError={storageError}
+              isDbPermanent={isDbPermanent}
             />
           )}
 

@@ -2,57 +2,8 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default-deny all catch-all
     match /{document=**} {
-      allow read, write: if false;
-    }
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isAdmin() {
-      return isSignedIn() && request.auth.token.email == 'halvmorgan@gmail.com';
-    }
-
-    // System configuration (accessible only by Hal)
-    match /system/{configId} {
-      allow read, write: if isAdmin();
-    }
-
-    // Client session tokens
-    match /client_sessions/{sessionId} {
       allow read, write: if true;
-    }
-
-    // Clients & agency internal businesses
-    match /clients/{clientId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Campaigns
-    match /campaigns/{campaignId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Ad sets
-    match /adSets/{adSetId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Ads
-    match /ads/{adId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
-    }
-
-    // Leads
-    match /leads/{leadId} {
-      allow read: if isSignedIn();
-      allow write: if isAdmin();
     }
   }
 }

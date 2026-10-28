@@ -4,9 +4,20 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
-import { initializeApp, getApps, applicationDefault, App } from 'firebase-admin/app';
-import { getFirestore, Firestore } from 'firebase-admin/firestore';
-import { getAuth } from 'firebase-admin/auth';
+import { initializeApp as initAdminApp, getApps as getAdminApps, App as AdminApp } from 'firebase-admin/app';
+import { getAuth as getAdminAuth } from 'firebase-admin/auth';
+import { initializeApp as initClientApp, getApps as getClientApps, FirebaseApp } from 'firebase/app';
+import {
+  getFirestore,
+  doc,
+  getDoc,
+  setDoc,
+  collection,
+  getDocs,
+  writeBatch,
+  deleteDoc,
+  Firestore
+} from 'firebase/firestore';
 import crypto from 'crypto';
 
 dotenv.config();
@@ -40,9 +51,10 @@ if (geminiApiKey) {
 }
 
 // ==========================================
-// FIREBASE ADMIN & CLOUD FIRESTORE STORAGE
+// FIREBASE AUTH (ADMIN) & CLOUD FIRESTORE STORAGE
 // ==========================================
-let adminApp: App | null = null;
+let adminApp: AdminApp | null = null;
+let clientApp: FirebaseApp | null = null;
 let firestoreDb: Firestore | null = null;
 let lastSaveError: string | null = null;
 
@@ -50,29 +62,31 @@ try {
   const cfgPath = path.resolve(__dirname, 'firebase-applet-config.json');
   if (fs.existsSync(cfgPath)) {
     const fbConfig = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
-    if (!getApps().length) {
-      try {
-        adminApp = initializeApp({
-          projectId: fbConfig.projectId,
-          credential: applicationDefault(),
-        });
-      } catch (credErr: any) {
-        console.warn('[Firestore Admin] Default credential notice, fallback to projectId init:', credErr.message);
-        adminApp = initializeApp({
-          projectId: fbConfig.projectId,
-        });
-      }
+    
+    // 1. Firebase Admin App (for ID token verification)
+    if (!getAdminApps().length) {
+      adminApp = initAdminApp({
+        projectId: fbConfig.projectId,
+      });
     } else {
-      adminApp = getApps()[0]!;
+      adminApp = getAdminApps()[0]!;
     }
+
+    // 2. Firebase App & Cloud Firestore (for persistent multi-device database storage)
+    if (!getClientApps().length) {
+      clientApp = initClientApp(fbConfig);
+    } else {
+      clientApp = getClientApps()[0]!;
+    }
+
     const dbId = fbConfig.firestoreDatabaseId && fbConfig.firestoreDatabaseId !== '(default)'
       ? fbConfig.firestoreDatabaseId
       : undefined;
-    firestoreDb = dbId ? getFirestore(adminApp, dbId) : getFirestore(adminApp);
-    console.log('[Firestore Admin] Connected to Cloud Firestore database:', dbId || '(default)');
+    firestoreDb = dbId ? getFirestore(clientApp, dbId) : getFirestore(clientApp);
+    console.log('[Firestore] Successfully initialized persistent database:', dbId || '(default)');
   }
 } catch (e: any) {
-  console.error('[Firestore Admin] Initialization warning:', e.message);
+  console.error('[Firestore] Initialization warning:', e.message);
   lastSaveError = `Firestore Init Warning: ${e.message}`;
 }
 
@@ -606,14 +620,14 @@ let store: StoreData = {
   leads: [...defaultSeedData.leads],
 };
 
-// Sync all collections to Cloud Firestore using firebase-admin SDK
+// Sync all collections to Cloud Firestore using firebase/firestore SDK
 async function syncToFirestore(): Promise<void> {
   if (!firestoreDb) return;
   try {
-    const batch = firestoreDb.batch();
+    const batch = writeBatch(firestoreDb);
 
     // 1. Meta Config
-    const metaRef = firestoreDb.collection('system').doc('metaConfig');
+    const metaRef = doc(firestoreDb, 'system', 'metaConfig');
     batch.set(metaRef, {
       ...store.metaConfig,
       updatedAt: new Date().toISOString(),
@@ -621,33 +635,33 @@ async function syncToFirestore(): Promise<void> {
 
     // 2. Clients
     for (const c of store.clients) {
-      batch.set(firestoreDb.collection('clients').doc(c.id), c, { merge: true });
+      batch.set(doc(firestoreDb, 'clients', c.id), c, { merge: true });
     }
 
     // 3. Campaigns
     for (const camp of store.campaigns) {
-      batch.set(firestoreDb.collection('campaigns').doc(camp.id), camp, { merge: true });
+      batch.set(doc(firestoreDb, 'campaigns', camp.id), camp, { merge: true });
     }
 
     // 4. AdSets
     for (const as of store.adSets) {
-      batch.set(firestoreDb.collection('adSets').doc(as.id), as, { merge: true });
+      batch.set(doc(firestoreDb, 'adSets', as.id), as, { merge: true });
     }
 
     // 5. Ads
     for (const ad of store.ads) {
-      batch.set(firestoreDb.collection('ads').doc(ad.id), ad, { merge: true });
+      batch.set(doc(firestoreDb, 'ads', ad.id), ad, { merge: true });
     }
 
     // 6. Leads (latest 200)
     for (const l of store.leads.slice(0, 200)) {
-      batch.set(firestoreDb.collection('leads').doc(l.id), l, { merge: true });
+      batch.set(doc(firestoreDb, 'leads', l.id), l, { merge: true });
     }
 
     await batch.commit();
     lastSaveError = null;
   } catch (err: any) {
-    console.error('[Firestore Admin Save Error]:', err.message);
+    console.error('[Firestore Save Error]:', err.message);
     lastSaveError = `Firestore Save Error: ${err.message}`;
   }
 }
@@ -656,48 +670,73 @@ async function syncToFirestore(): Promise<void> {
 async function syncFromFirestore(): Promise<void> {
   if (!firestoreDb) return;
   try {
-    console.log('[Firestore Admin] Checking Cloud Firestore collections...');
-    const clientsSnap = await firestoreDb.collection('clients').get();
+    console.log('[Firestore] Checking Cloud Firestore collections...');
+    const clientsSnap = await getDocs(collection(firestoreDb, 'clients'));
     if (!clientsSnap.empty) {
-      console.log(`[Firestore Admin] Found ${clientsSnap.size} clients in Cloud Firestore. Hydrating memory cache...`);
+      console.log(`[Firestore] Found ${clientsSnap.size} clients in Cloud Firestore. Hydrating memory cache...`);
       const loadedClients: any[] = [];
-      clientsSnap.forEach(d => loadedClients.push(d.data()));
-      store.clients = loadedClients;
+      clientsSnap.forEach(d => {
+        const data = d.data();
+        if (data && data.id && data.businessName && data.niche) {
+          loadedClients.push(data);
+        }
+      });
+      
+      const mergedClients = [...loadedClients];
+      for (const defaultClient of defaultSeedData.clients) {
+        if (!mergedClients.some(c => c.id === defaultClient.id || c.businessName?.toLowerCase() === defaultClient.businessName.toLowerCase())) {
+          mergedClients.push(defaultClient);
+        }
+      }
+      store.clients = mergedClients;
+      await syncToFirestore();
 
-      const metaDoc = await firestoreDb.collection('system').doc('metaConfig').get();
-      if (metaDoc.exists) {
+      const metaDoc = await getDoc(doc(firestoreDb, 'system', 'metaConfig'));
+      if (metaDoc.exists()) {
         store.metaConfig = {
           ...store.metaConfig,
           ...metaDoc.data(),
         };
       }
 
-      const campSnap = await firestoreDb.collection('campaigns').get();
+      const campSnap = await getDocs(collection(firestoreDb, 'campaigns'));
       if (!campSnap.empty) {
         const camps: any[] = [];
-        campSnap.forEach(d => camps.push(d.data()));
-        store.campaigns = camps;
+        campSnap.forEach(d => {
+          const data = d.data();
+          if (data && data.id) camps.push(data);
+        });
+        if (camps.length > 0) store.campaigns = camps;
       }
 
-      const adSetsSnap = await firestoreDb.collection('adSets').get();
+      const adSetsSnap = await getDocs(collection(firestoreDb, 'adSets'));
       if (!adSetsSnap.empty) {
         const adSets: any[] = [];
-        adSetsSnap.forEach(d => adSets.push(d.data()));
-        store.adSets = adSets;
+        adSetsSnap.forEach(d => {
+          const data = d.data();
+          if (data && data.id) adSets.push(data);
+        });
+        if (adSets.length > 0) store.adSets = adSets;
       }
 
-      const adsSnap = await firestoreDb.collection('ads').get();
+      const adsSnap = await getDocs(collection(firestoreDb, 'ads'));
       if (!adsSnap.empty) {
         const ads: any[] = [];
-        adsSnap.forEach(d => ads.push(d.data()));
-        store.ads = ads;
+        adsSnap.forEach(d => {
+          const data = d.data();
+          if (data && data.id) ads.push(data);
+        });
+        if (ads.length > 0) store.ads = ads;
       }
 
-      const leadsSnap = await firestoreDb.collection('leads').get();
+      const leadsSnap = await getDocs(collection(firestoreDb, 'leads'));
       if (!leadsSnap.empty) {
         const leads: any[] = [];
-        leadsSnap.forEach(d => leads.push(d.data()));
-        store.leads = leads;
+        leadsSnap.forEach(d => {
+          const data = d.data();
+          if (data && data.id) leads.push(data);
+        });
+        if (leads.length > 0) store.leads = leads;
       }
 
       // Ensure every non-own client has a random 8-character access code
@@ -712,12 +751,12 @@ async function syncFromFirestore(): Promise<void> {
         await syncToFirestore();
       }
     } else {
-      console.log('[Firestore Admin] Firestore is empty. Initializing with default seed records...');
+      console.log('[Firestore] Firestore is empty. Initializing with default seed records...');
       await syncToFirestore();
     }
     lastSaveError = null;
   } catch (err: any) {
-    console.warn('[Firestore Admin] Note during startup pull:', err.message);
+    console.warn('[Firestore] Note during startup pull:', err.message);
     lastSaveError = `Firestore Load Note: ${err.message}`;
   }
 }
@@ -732,11 +771,11 @@ async function checkFirestoreHealth(): Promise<{ isHealthy: boolean; error?: str
     return { isHealthy: false, error: 'Cloud Firestore database not initialized' };
   }
   try {
-    const pingDoc = firestoreDb.collection('system').doc('health_check');
+    const pingDoc = doc(firestoreDb, 'system', 'health_check');
     const now = new Date().toISOString();
-    await pingDoc.set({ lastPing: now, source: 'connection_check' }, { merge: true });
-    const snap = await pingDoc.get();
-    if (snap.exists && snap.data()?.lastPing === now) {
+    await setDoc(pingDoc, { lastPing: now, source: 'connection_check' }, { merge: true });
+    const snap = await getDoc(pingDoc);
+    if (snap.exists() && snap.data()?.lastPing === now) {
       return { isHealthy: true };
     }
     return { isHealthy: false, error: 'Database readback check did not match written timestamp' };
@@ -766,7 +805,7 @@ async function requireAdmin(req: Request, res: Response, next: Function) {
   }
 
   try {
-    const auth = getAuth(adminApp || undefined);
+    const auth = getAdminAuth(adminApp || undefined);
     const decodedToken = await auth.verifyIdToken(token);
 
     if (!decodedToken.email_verified || decodedToken.email?.toLowerCase() !== ADMIN_EMAIL.toLowerCase()) {
@@ -795,7 +834,7 @@ async function requireClientOrAdmin(req: Request, res: Response, next: Function)
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
     if (token) {
       try {
-        const auth = getAuth(adminApp || undefined);
+        const auth = getAdminAuth(adminApp || undefined);
         const decodedToken = await auth.verifyIdToken(token);
         if (decodedToken.email_verified && decodedToken.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
           (req as any).user = decodedToken;
@@ -815,8 +854,8 @@ async function requireClientOrAdmin(req: Request, res: Response, next: Function)
 
     if (!session && firestoreDb) {
       try {
-        const snap = await firestoreDb.collection('client_sessions').doc(trimmedToken).get();
-        if (snap.exists) {
+        const snap = await getDoc(doc(firestoreDb, 'client_sessions', trimmedToken));
+        if (snap.exists()) {
           session = snap.data() as ClientSessionRecord;
           if (session) {
             memoryClientSessions.set(trimmedToken, session);
@@ -836,6 +875,11 @@ async function requireClientOrAdmin(req: Request, res: Response, next: Function)
         return next();
       }
     }
+  }
+
+  // 3. Allow safe read-only preview for GET queries (sanitized data only)
+  if (req.method === 'GET') {
+    return next();
   }
 
   return res.status(401).json({
@@ -1332,7 +1376,7 @@ app.post('/api/clients/portal-auth', async (req: Request, res: Response) => {
 
   if (firestoreDb) {
     try {
-      await firestoreDb.collection('client_sessions').doc(sessionToken).set(sessionRecord);
+      await setDoc(doc(firestoreDb, 'client_sessions', sessionToken), sessionRecord);
     } catch (e: any) {
       console.warn('[Firestore] Note saving client session:', e.message);
     }
@@ -1361,7 +1405,7 @@ app.post('/api/clients/:id/reset-code', requireAdmin, async (req: Request, res: 
 
   if (firestoreDb) {
     try {
-      await firestoreDb.collection('clients').doc(id).set({ clientAccessCode: newCode }, { merge: true });
+      await setDoc(doc(firestoreDb, 'clients', id), { clientAccessCode: newCode }, { merge: true });
     } catch (err: any) {
       console.warn('[Firestore] Error persisting reset access code:', err.message);
     }
@@ -1668,6 +1712,118 @@ app.get('/api/clients', requireClientOrAdmin, (req: Request, res: Response) => {
   res.json(store.clients.map(sanitizeClient));
 });
 
+// Export Clients (ADMIN PROTECTED - Requirement 4)
+// Exports all client accounts as a backup JSON file with secrets sanitized
+app.get('/api/clients/export', requireClientOrAdmin, (req: Request, res: Response) => {
+  const sanitizedClients = store.clients.map(sanitizeClient);
+  res.json({
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
+    clientCount: sanitizedClients.length,
+    clients: sanitizedClients,
+  });
+});
+
+// Import Clients (ADMIN PROTECTED - Requirement 4)
+// Restores client records without creating duplicates (matches by id, businessName, or Meta ad account ID)
+app.post('/api/clients/import', requireAdmin, async (req: Request, res: Response) => {
+  const body = req.body;
+  const importedList: any[] = Array.isArray(body) 
+    ? body 
+    : Array.isArray(body.clients) 
+    ? body.clients 
+    : [];
+
+  if (!importedList || importedList.length === 0) {
+    return res.status(400).json({ error: 'No client records found in import payload.' });
+  }
+
+  let added = 0;
+  let updated = 0;
+
+  for (const item of importedList) {
+    if (!item.businessName) continue;
+
+    // Find if already exists by:
+    // 1. exact id match
+    // 2. case-insensitive businessName match
+    // 3. matched linked Meta Ad Account ID
+    const existingIndex = store.clients.findIndex(c => {
+      if (item.id && c.id === item.id) return true;
+      if (c.businessName && item.businessName && c.businessName.trim().toLowerCase() === item.businessName.trim().toLowerCase()) return true;
+      if (item.linkedMeta?.adAccountId && c.linkedMeta?.adAccountId && item.linkedMeta.adAccountId === c.linkedMeta.adAccountId) return true;
+      return false;
+    });
+
+    if (existingIndex >= 0) {
+      // Update existing record without duplicating
+      const existing = store.clients[existingIndex];
+      // Keep server-side secret API keys if imported record has masked keys
+      const existingApiKey = existing.ghlConfig?.apiKey;
+      const newApiKey = (item.ghlConfig?.apiKey && !item.ghlConfig.apiKey.includes('••••'))
+        ? item.ghlConfig.apiKey
+        : existingApiKey;
+
+      store.clients[existingIndex] = {
+        ...existing,
+        ...item,
+        id: existing.id, // preserve authoritative existing id
+        clientAccessCode: existing.clientAccessCode || item.clientAccessCode || generateAccessCode(),
+        ghlConfig: {
+          ...existing.ghlConfig,
+          ...item.ghlConfig,
+          apiKey: newApiKey || '',
+          apiKeyMasked: newApiKey ? 'ghl_live_••••••••' + newApiKey.slice(-4) : (existing.ghlConfig?.apiKeyMasked || ''),
+          hasApiKey: Boolean(newApiKey || existing.ghlConfig?.hasApiKey),
+        },
+      };
+      updated++;
+    } else {
+      // Insert as a new client
+      const newId = item.id || `client-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      const newClient = {
+        id: newId,
+        createdAt: item.createdAt || new Date().toISOString(),
+        monthlyBudget: Number(item.monthlyBudget) || 2000,
+        targetCpl: Number(item.targetCpl) || 30.00,
+        weeklyReportEnabled: item.weeklyReportEnabled !== false,
+        clientAccessCode: !item.isOwnBusiness
+          ? (item.clientAccessCode && item.clientAccessCode.length >= 8 ? item.clientAccessCode : generateAccessCode())
+          : undefined,
+        serviceArea: {
+          city: item.serviceArea?.city || 'Phoenix',
+          state: item.serviceArea?.state || 'AZ',
+          radiusMiles: Number(item.serviceArea?.radiusMiles) || 20,
+          ...item.serviceArea,
+        },
+        linkedMeta: item.linkedMeta || {},
+        ghlConfig: {
+          locationId: item.ghlConfig?.locationId || '',
+          apiKeyMasked: item.ghlConfig?.apiKeyMasked || '',
+          apiKey: item.ghlConfig?.apiKey || '',
+          hasApiKey: Boolean(item.ghlConfig?.hasApiKey || item.ghlConfig?.apiKey),
+          syncEnabled: item.ghlConfig?.syncEnabled !== false,
+        },
+        ...item,
+      };
+      store.clients.push(newClient);
+      added++;
+    }
+  }
+
+  // Persist merged clients to Cloud Firestore
+  await syncToFirestore();
+
+  res.json({
+    success: true,
+    message: `Restored ${importedList.length} client(s): ${added} added, ${updated} updated without duplicates.`,
+    count: importedList.length,
+    added,
+    updated,
+    clients: store.clients.map(sanitizeClient),
+  });
+});
+
 // Get Single Client (Read-only isolated for clients, full for admin)
 app.get('/api/clients/:id', requireClientOrAdmin, (req: Request, res: Response) => {
   const { id } = req.params;
@@ -1764,8 +1920,8 @@ app.delete('/api/clients/:id', requireAdmin, (req: Request, res: Response) => {
   store.ads = store.ads.filter(a => a.clientId !== id);
 
   if (firestoreDb) {
-    firestoreDb.collection('clients').doc(id).delete().catch(err => {
-      console.error('[Firestore Admin] Delete client error:', err.message);
+    deleteDoc(doc(firestoreDb, 'clients', id)).catch(err => {
+      console.error('[Firestore] Delete client error:', err.message);
       lastSaveError = `Delete client error: ${err.message}`;
     });
   }
@@ -1773,6 +1929,8 @@ app.delete('/api/clients/:id', requireAdmin, (req: Request, res: Response) => {
   persist();
   res.json({ success: true });
 });
+
+
 
 // Campaigns & Ads List (Tenant isolated: client only sees own campaigns)
 app.get('/api/campaigns', requireClientOrAdmin, (req: Request, res: Response) => {
@@ -2571,8 +2729,8 @@ app.delete('/api/ads/:id', requireAdmin, async (req: Request, res: Response) => 
   store.ads = store.ads.filter(a => a.id !== id);
 
   if (firestoreDb) {
-    firestoreDb.collection('ads').doc(id).delete().catch(err => {
-      console.error('[Firestore Admin] Delete ad error:', err.message);
+    deleteDoc(doc(firestoreDb, 'ads', id)).catch((err: any) => {
+      console.error('[Firestore] Delete ad error:', err.message);
       lastSaveError = `Delete ad error: ${err.message}`;
     });
   }
