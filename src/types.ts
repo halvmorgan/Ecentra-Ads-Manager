@@ -122,6 +122,8 @@ export interface AdCreative {
   imageUrl: string;
   imageFormat: '1:1' | '9:16';
   imageHash?: string;
+  imageMethod?: 'uploaded' | 'url';
+  imageDeliveryLabel?: string;
   websiteUrl?: string; // Required when goalType === 'TRAFFIC_WEBSITE'
   formId?: string;
   formName?: string;

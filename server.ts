@@ -955,7 +955,7 @@ async function callMetaApi(endpoint: string, options: {
   return data;
 }
 
-// Upload Image to Meta Ad Account
+// Upload Image to Meta Ad Account (Requirement 1: Download image on server and upload using bytes field)
 async function uploadImageToMeta(adAccountId: string, imageSource: string, token: string): Promise<string> {
   const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
 
@@ -964,48 +964,36 @@ async function uploadImageToMeta(adAccountId: string, imageSource: string, token
     return imageSource.trim();
   }
 
-  try {
-    // If base64
-    if (imageSource.startsWith('data:image/')) {
-      const base64Data = imageSource.split(',')[1];
-      const res = await callMetaApi(`${cleanAccountId}/adimages`, {
-        method: 'POST',
-        token,
-        body: {
-          bytes: base64Data,
-          filename: `ad_creative_${Date.now()}.png`,
-        },
-      });
-
-      if (res.images) {
-        const firstKey = Object.keys(res.images)[0];
-        if (res.images[firstKey]?.hash) {
-          return res.images[firstKey].hash;
-        }
-      }
-      if (res.hash) return res.hash;
-    } else {
-      // Public Image URL
-      const res = await callMetaApi(`${cleanAccountId}/adimages`, {
-        method: 'POST',
-        token,
-        body: {
-          url: imageSource,
-        },
-      });
-
-      if (res.images) {
-        const firstKey = Object.keys(res.images)[0];
-        if (res.images[firstKey]?.hash) {
-          return res.images[firstKey].hash;
-        }
-      }
-      if (res.hash) return res.hash;
+  let base64Data = '';
+  if (imageSource.startsWith('data:image/')) {
+    base64Data = imageSource.split(',')[1];
+  } else {
+    // Download image from URL on server, convert to base64
+    const imgFetch = await fetch(imageSource);
+    if (!imgFetch.ok) {
+      throw new Error(`Failed to download ad creative image from ${imageSource} (${imgFetch.statusText})`);
     }
-  } catch (err: any) {
-    console.error('Meta ad image upload failed:', err);
-    throw new Error(`Failed to upload ad image to Meta: ${err.message}`);
+    const arrayBuffer = await imgFetch.arrayBuffer();
+    base64Data = Buffer.from(arrayBuffer).toString('base64');
   }
+
+  // Upload the actual image file to act_<ad account id>/adimages using the "bytes" field
+  const res = await callMetaApi(`${cleanAccountId}/adimages`, {
+    method: 'POST',
+    token,
+    body: {
+      bytes: base64Data,
+      filename: `ad_creative_${Date.now()}.png`,
+    },
+  });
+
+  if (res.images) {
+    const firstKey = Object.keys(res.images)[0];
+    if (res.images[firstKey]?.hash) {
+      return res.images[firstKey].hash;
+    }
+  }
+  if (res.hash) return res.hash;
 
   throw new Error('Meta did not return an image hash for the uploaded ad image.');
 }
@@ -1959,7 +1947,7 @@ app.get('/api/campaigns', requireClientOrAdmin, (req: Request, res: Response) =>
 });
 
 // Requirement 2, 3, 4, 5: CREATE AN AD (Full Meta Marketing API v21.0 Pipeline with Rollback)
-app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Response) => {
+app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async (req: Request, res: Response) => {
   const {
     clientId,
     offerTitle,
@@ -2062,6 +2050,8 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
   let metaCreativeId = '';
   let metaAdId = '';
   let currentStepName = 'campaign';
+  let imageDeliveryMethod: 'uploaded' | 'url' = 'uploaded';
+  const finalImageUrl = imageUrl || 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80';
 
   // Special Category Rule Enforcement
   const isSpecialCategory = specialCategory && specialCategory !== 'NONE';
@@ -2181,9 +2171,29 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     // ------------------------------------------------------------------------
     // Step c. Image:
     // upload selected creative image to client's ad account (adimages) and get its image hash
+    // Requirement 1 & 2: Download on server, upload via bytes.
+    // If upload fails with Meta error #3, fall back automatically to creative link_data picture URL.
     // ------------------------------------------------------------------------
     currentStepName = 'image';
-    metaImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
+    imageDeliveryMethod = 'uploaded';
+
+    try {
+      metaImageHash = await uploadImageToMeta(cleanAccountId, finalImageUrl, token);
+      imageDeliveryMethod = 'uploaded';
+      console.log(`[Meta Ad Wizard] Image successfully uploaded via bytes to ${cleanAccountId}, hash: ${metaImageHash}`);
+    } catch (imgErr: any) {
+      const metaCode = imgErr?.metaError?.code || imgErr?.code;
+      const metaMsg = (imgErr?.metaError?.message || imgErr?.message || '').toLowerCase();
+      const isError3 = metaCode === 3 || metaMsg.includes('(#3)') || metaMsg.includes('capability');
+
+      if (isError3) {
+        console.warn(`[Meta Ad Wizard] Meta error #3 (capability) encountered on adimages upload. Automatically falling back to link_data picture URL: ${finalImageUrl}`);
+        imageDeliveryMethod = 'url';
+        metaImageHash = '';
+      } else {
+        throw imgErr;
+      }
+    }
 
     // If goalType is LEAD_GEN, create or prepare Instant Form on client's page
     if (goalType === 'LEAD_GEN') {
@@ -2202,7 +2212,7 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     // Step d. Ad Creative:
     // object_story_spec with client's Facebook Page ID and link_data containing:
     // link = destination URL, message = Primary Text, name = Headline, description = Description,
-    // image_hash from step c, call_to_action type from CTA button with same link
+    // image_hash from step c OR picture URL if error #3 fallback, call_to_action
     // ------------------------------------------------------------------------
     currentStepName = 'creative';
     const ctaType = callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE');
@@ -2211,7 +2221,6 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
       message: primaryText,
       name: headline || offerTitle,
       description: description || '',
-      image_hash: metaImageHash,
       call_to_action: {
         type: ctaType,
         value: goalType === 'TRAFFIC_WEBSITE'
@@ -2219,6 +2228,12 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
           : { lead_gen_form_id: metaFormId },
       },
     };
+
+    if (imageDeliveryMethod === 'uploaded' && metaImageHash) {
+      linkData.image_hash = metaImageHash;
+    } else {
+      linkData.picture = finalImageUrl;
+    }
 
     const creativePayload: any = {
       name: `${headline || offerTitle} - Creative`,
@@ -2328,6 +2343,8 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     metaAdSetId,
   };
 
+  const imageDeliveryLabel = imageDeliveryMethod === 'url' ? 'Image: linked by URL' : 'Image: uploaded';
+
   const newAd = {
     id: adId,
     adSetId,
@@ -2342,9 +2359,11 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     headline: headline || offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Visit Official Website' : 'Exclusive Local Offer'),
     description: description || (goalType === 'TRAFFIC_WEBSITE' ? 'Fast online service.' : 'Tap below to claim your offer in seconds.'),
     callToAction: callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE'),
-    imageUrl: imageUrl || 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80',
+    imageUrl: finalImageUrl,
     imageFormat: imageFormat || '1:1',
-    imageHash: metaImageHash,
+    imageHash: metaImageHash || undefined,
+    imageMethod: imageDeliveryMethod,
+    imageDeliveryLabel,
     formId: metaFormId,
     formName: goalType === 'LEAD_GEN' ? `${offerTitle} - Instant Lead Form` : undefined,
     createdAt: new Date().toISOString(),
@@ -2366,6 +2385,8 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     metaAdSetId,
     metaAdId,
     metaCreativeId,
+    imageMethod: imageDeliveryMethod,
+    imageDeliveryLabel,
     headlineSent: headline || offerTitle,
     adAccountClean: cleanAccountId.replace(/^act_/i, ''),
     message: 'Campaign, Ad Set, Creative, and Ad created directly in Meta Ads Manager as PAUSED.',
@@ -2945,8 +2966,21 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
 
     if (isLive) {
       try {
+        let imageFallbackUrl = '';
         if (imageUrl && imageUrl !== ad.imageUrl) {
-          newImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
+          try {
+            newImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
+          } catch (imgErr: any) {
+            const metaCode = imgErr?.metaError?.code || imgErr?.code;
+            const metaMsg = (imgErr?.metaError?.message || imgErr?.message || '').toLowerCase();
+            if (metaCode === 3 || metaMsg.includes('(#3)') || metaMsg.includes('capability')) {
+              console.warn(`[Edit Ad] Error #3 on adimages upload. Falling back to picture URL: ${imageUrl}`);
+              newImageHash = '';
+              imageFallbackUrl = imageUrl;
+            } else {
+              throw imgErr;
+            }
+          }
         }
 
         if (formQuestions) {
@@ -2959,6 +2993,22 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
         }
 
         // Create new creative
+        const linkData: any = {
+          message: primaryText || ad.primaryText,
+          name: headline || ad.headline,
+          description: description || ad.description,
+          call_to_action: {
+            type: callToAction || ad.callToAction,
+            value: { lead_gen_form_id: newFormId },
+          },
+        };
+
+        if (newImageHash) {
+          linkData.image_hash = newImageHash;
+        } else if (imageFallbackUrl || imageUrl || ad.imageUrl) {
+          linkData.picture = imageFallbackUrl || imageUrl || ad.imageUrl;
+        }
+
         const newCreativeRes = await callMetaApi(`${cleanAccountId}/adcreatives`, {
           method: 'POST',
           token,
@@ -2967,16 +3017,7 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
             object_story_spec: {
               page_id: pageId,
               ...(instagramId ? { instagram_actor_id: instagramId } : {}),
-              link_data: {
-                image_hash: newImageHash || 'default_hash',
-                message: primaryText || ad.primaryText,
-                name: headline || ad.headline,
-                description: description || ad.description,
-                call_to_action: {
-                  type: callToAction || ad.callToAction,
-                  value: { lead_gen_form_id: newFormId },
-                },
-              },
+              link_data: linkData,
             },
           },
         });

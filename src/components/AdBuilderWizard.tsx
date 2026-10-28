@@ -1685,6 +1685,20 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                           )}
                         </div>
 
+                        {/* Image Method Used (Requirement 3: "Image: uploaded" or "Image: linked by URL") */}
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500 font-medium">Image Method:</span>
+                          <span className={`font-semibold px-2 py-0.5 rounded text-[11px] ${
+                            (launchSuccessData?.imageMethod === 'url' || launchSuccessData?.ad?.imageMethod === 'url')
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {launchSuccessData?.imageDeliveryLabel ||
+                             launchSuccessData?.ad?.imageDeliveryLabel ||
+                             (launchSuccessData?.imageMethod === 'url' ? 'Image: linked by URL' : 'Image: uploaded')}
+                          </span>
+                        </div>
+
                         {/* Real Meta IDs Section (Requirement 6) */}
                         <div className="mt-3 pt-2.5 border-t border-slate-200 bg-white p-3 rounded-lg border space-y-1.5 font-mono text-[11px]">
                           <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider font-sans mb-1">
@@ -1702,6 +1716,12 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                             <span className="text-slate-500 font-sans">Ad ID:</span>
                             <span className="font-bold text-slate-900">{adMetaId}</span>
                           </div>
+                          {(launchSuccessData?.metaCreativeId || launchSuccessData?.ad?.metaCreativeId) && (
+                            <div className="flex justify-between">
+                              <span className="text-slate-500 font-sans">Creative ID:</span>
+                              <span className="font-bold text-slate-900">{launchSuccessData?.metaCreativeId || launchSuccessData?.ad?.metaCreativeId}</span>
+                            </div>
+                          )}
                         </div>
                       </div>
 
