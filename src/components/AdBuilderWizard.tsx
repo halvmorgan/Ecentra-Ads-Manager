@@ -25,10 +25,12 @@ import {
   ExternalLink,
   Search,
   Building,
-  Target
+  Target,
+  Users
 } from 'lucide-react';
 import { Client, GeneratedAdCopy, AdGoalType, SpecialAdCategory, GeoLocationSearchResult } from '../types';
 import { api } from '../services/api';
+import { getNicheLabel, getNicheAudienceRecommendation } from '../utils/niche';
 
 interface AdBuilderWizardProps {
   isOpen: boolean;
@@ -121,37 +123,75 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       setPrivacyPolicyUrl(`${activeClient.websiteUrl}/privacy-policy`);
       setThankYouPhone(activeClient.phone);
 
-      if (activeClient.isOwnBusiness || activeClient.niche === 'appraisal_real_estate') {
+      const n = (activeClient.niche || '').toLowerCase();
+      if (activeClient.isOwnBusiness || n === 'appraisal_real_estate' || n.includes('appraisal') || n.includes('real estate')) {
         setSpecialCategory('HOUSING');
         setGoalType('TRAFFIC_WEBSITE');
         setOfferText('Fast Certified Real Estate Appraisal & Home Valuation Reports');
         setImagePrompt('Modern residential property with licensed Michigan real estate appraisal documents');
         setCallToAction('LEARN_MORE');
         setCity(activeClient.serviceArea.city || 'Detroit');
+        setMinAge(18);
+        setMaxAge(65);
+        setGenders('ALL');
         setSelectedLocation({
           key: '3866',
           name: 'Michigan',
           type: 'region',
           country_code: 'US',
         });
-      } else if (activeClient.niche === 'water_mold') {
+      } else if (n === 'digital_product' || n.includes('digital') || n.includes('guide')) {
+        setSpecialCategory('NONE');
+        setGoalType('TRAFFIC_WEBSITE');
+        setOfferText('Free Download: The Step-by-Step Strategic Blueprint & Practical Guide');
+        setImagePrompt('Modern digital tablet device displaying high-value strategic guide cover with clean typography');
+        setCallToAction('LEARN_MORE');
+        setMinAge(25);
+        setMaxAge(65);
+        setGenders('ALL');
+      } else if (n === 'marketing_business' || n.includes('marketing') || n.includes('business')) {
+        setSpecialCategory('NONE');
+        setGoalType('LEAD_GEN');
+        setOfferText('Free Local Growth & Customer Acquisition Strategy Session');
+        setImagePrompt('Modern bright office workspace with entrepreneur reviewing performance growth charts');
+        setCallToAction('GET_QUOTE');
+        setMinAge(25);
+        setMaxAge(65);
+        setGenders('ALL');
+      } else if (n === 'water_mold') {
         setSpecialCategory('NONE');
         setGoalType('LEAD_GEN');
         setOfferText('Free 60-Minute Emergency Mold & Moisture Audit');
         setImagePrompt('Courteous restoration inspector with moisture meter assessing drywall in clean home');
         setCallToAction('GET_QUOTE');
-      } else if (activeClient.niche === 'med_spa') {
+        setMinAge(28);
+        setMaxAge(65);
+      } else if (n === 'med_spa') {
         setSpecialCategory('NONE');
         setGoalType('LEAD_GEN');
         setOfferText('$99 First Glow Facial + Skin Consultation');
         setImagePrompt('Warm, tranquil treatment room with aesthetician in Scottsdale boutique med spa');
         setCallToAction('BOOK_NOW');
-      } else if (activeClient.niche === 'solar') {
+        setMinAge(25);
+        setMaxAge(60);
+      } else if (n === 'solar') {
         setSpecialCategory('CREDIT'); // solar financing options
         setGoalType('LEAD_GEN');
         setOfferText('Free Home Solar Utility Savings Analysis');
         setImagePrompt('Modern residential home with clean solar panels under blue sky in Colorado');
         setCallToAction('LEARN_MORE');
+        setMinAge(30);
+        setMaxAge(65);
+      } else {
+        // Other / custom typed niche: neutral, general wording, fully editable
+        setSpecialCategory('NONE');
+        setGoalType('LEAD_GEN');
+        setOfferText(`Introductory Special & Consultation – ${activeClient.businessName}`);
+        setImagePrompt(`Professional local team providing quality ${getNicheLabel(activeClient.niche)} services`);
+        setCallToAction('GET_QUOTE');
+        setMinAge(25);
+        setMaxAge(65);
+        setGenders('ALL');
       }
     }
   }, [activeClient]);
@@ -432,7 +472,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   >
                     {clients.map((c) => (
                       <option key={c.id} value={c.id}>
-                        {c.businessName} {c.isOwnBusiness ? '★ (My Own Business)' : `(${c.serviceArea.city}, ${c.serviceArea.state} • ${c.niche})`}
+                        {c.businessName} {c.isOwnBusiness ? '★ (My Own Business)' : `(${c.serviceArea.city}, ${c.serviceArea.state} • ${getNicheLabel(c.niche)})`}
                       </option>
                     ))}
                   </select>
@@ -913,6 +953,20 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   Meta Targeting API geolocation lookup & compliance controls.
                 </p>
               </div>
+
+              {activeClient && (
+                <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3 text-xs flex items-start gap-2.5">
+                  <Users className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold text-amber-950 block">
+                      Recommended Audience ({getNicheLabel(activeClient?.niche)}):
+                    </span>
+                    <span className="text-amber-900 leading-relaxed text-[11px]">
+                      {getNicheAudienceRecommendation(activeClient?.niche)}
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* LOCATION TARGETING WITH META SEARCH API */}
               <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">

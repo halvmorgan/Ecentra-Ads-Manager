@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { Client, NicheType } from '../types';
 import { api } from '../services/api';
+import { getNicheLabel, STANDARD_NICHES } from '../utils/niche';
 
 interface ClientManagementProps {
   clients: Client[];
@@ -73,7 +74,8 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
 
   // Form State
   const [businessName, setBusinessName] = useState('');
-  const [niche, setNiche] = useState<NicheType>('med_spa');
+  const [selectedNiche, setSelectedNiche] = useState<string>('med_spa');
+  const [customNiche, setCustomNiche] = useState<string>('');
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [city, setCity] = useState('');
   const [state, setState] = useState('AZ');
@@ -96,7 +98,8 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const openAddModal = () => {
     setEditingClient(null);
     setBusinessName('');
-    setNiche('med_spa');
+    setSelectedNiche('med_spa');
+    setCustomNiche('');
     setWebsiteUrl('');
     setCity('');
     setState('AZ');
@@ -121,7 +124,14 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const openEditModal = (c: Client) => {
     setEditingClient(c);
     setBusinessName(c.businessName);
-    setNiche(c.niche);
+    const standardOption = STANDARD_NICHES.find(opt => opt.value === c.niche && opt.value !== 'other');
+    if (standardOption) {
+      setSelectedNiche(c.niche);
+      setCustomNiche('');
+    } else {
+      setSelectedNiche('other');
+      setCustomNiche(c.niche || '');
+    }
     setWebsiteUrl(c.websiteUrl);
     setCity(c.serviceArea.city);
     setState(c.serviceArea.state);
@@ -146,10 +156,14 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const handleSaveClient = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const finalNiche = selectedNiche === 'other'
+        ? (customNiche.trim() || 'Other')
+        : selectedNiche;
+
       await api.saveClient({
         id: editingClient ? editingClient.id : undefined,
         businessName,
-        niche,
+        niche: finalNiche as NicheType,
         isOwnBusiness,
         websiteUrl,
         serviceArea: {
@@ -212,17 +226,6 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
       setTestLeadFeedback('Failed to simulate lead: ' + err.message);
     } finally {
       setIsTestingLead(false);
-    }
-  };
-
-  const getNicheLabel = (n: NicheType) => {
-    switch (n) {
-      case 'med_spa': return 'Med Spa / Aesthetics';
-      case 'water_mold': return 'Water & Mold Remediation';
-      case 'solar': return 'Solar Energy';
-      case 'remodeling': return 'Home Remodeling';
-      case 'home_services': return 'Home Services';
-      default: return 'Local Service';
     }
   };
 
@@ -483,8 +486,14 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     Service Niche *
                   </label>
                   <select
-                    value={niche}
-                    onChange={(e) => setNiche(e.target.value as NicheType)}
+                    value={selectedNiche}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setSelectedNiche(val);
+                      if (val !== 'other') {
+                        setCustomNiche('');
+                      }
+                    }}
                     className="w-full border border-slate-300 rounded-lg p-2 font-medium"
                   >
                     <option value="med_spa">Med Spa / Aesthetics</option>
@@ -492,7 +501,28 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     <option value="solar">Solar Energy</option>
                     <option value="remodeling">Home Remodeling</option>
                     <option value="home_services">Home Services</option>
+                    <option value="appraisal_real_estate">Real Estate / Appraisal</option>
+                    <option value="digital_product">Digital Product / Guide</option>
+                    <option value="marketing_business">Marketing / Business Services</option>
+                    <option value="other">Other (type your own)</option>
                   </select>
+
+                  {selectedNiche === 'other' && (
+                    <div className="mt-2 animate-fade-in">
+                      <label className="block font-semibold text-slate-700 mb-1 text-[11px]">
+                        Enter niche
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={customNiche}
+                        onChange={(e) => setCustomNiche(e.target.value)}
+                        placeholder="Type custom niche (e.g. Accounting, Personal Training, Roofing)"
+                        className="w-full border border-slate-300 rounded-lg p-2 bg-slate-50 font-medium text-xs focus:bg-white focus:border-amber-500"
+                        autoFocus
+                      />
+                    </div>
+                  )}
                 </div>
 
                 <div>

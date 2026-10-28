@@ -5,7 +5,10 @@ export type NicheType =
   | 'remodeling' 
   | 'home_services' 
   | 'appraisal_real_estate'
-  | 'other';
+  | 'digital_product'
+  | 'marketing_business'
+  | 'other'
+  | (string & {});
 
 export type SpecialAdCategory = 'NONE' | 'HOUSING' | 'CREDIT' | 'EMPLOYMENT';
 

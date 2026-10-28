@@ -2844,7 +2844,16 @@ app.get('/api/insights', requireClientOrAdmin, async (req: Request, res: Respons
     targetClients.forEach(c => {
       const clientDailySpend = (c.monthlyBudget / 30);
       const clientSpend = clientDailySpend * days;
-      const clientCpl = c.niche === 'water_mold' ? 42.50 : c.niche === 'med_spa' ? 24.80 : 51.00;
+      const clientCpl = c.targetCpl || (
+        c.niche === 'water_mold' ? 42.50 :
+        c.niche === 'med_spa' ? 24.80 :
+        c.niche === 'solar' ? 55.00 :
+        c.niche === 'remodeling' ? 48.00 :
+        c.niche === 'home_services' ? 36.00 :
+        c.niche === 'appraisal_real_estate' ? 32.00 :
+        c.niche === 'digital_product' ? 14.50 :
+        c.niche === 'marketing_business' ? 38.00 : 35.00
+      );
       const clientLeads = Math.max(1, Math.round(clientSpend / clientCpl));
       const clientBookings = Math.max(1, Math.round(clientLeads * 0.42));
       const clientClicks = clientLeads * 14;
@@ -3235,8 +3244,9 @@ Respond with ONLY valid JSON containing an array of 3 objects with keys: version
 function getPolicyCompliantTemplates(niche: string, offer: string, clientName: string, city: string) {
   const loc = city || 'your neighborhood';
   const biz = clientName || 'our local team';
+  const n = (niche || '').toLowerCase();
 
-  if (niche === 'med_spa') {
+  if (n === 'med_spa') {
     return [
       {
         id: `copy-${Date.now()}-1`,
@@ -3265,7 +3275,7 @@ function getPolicyCompliantTemplates(niche: string, offer: string, clientName: s
     ];
   }
 
-  if (niche === 'water_mold') {
+  if (n === 'water_mold') {
     return [
       {
         id: `copy-${Date.now()}-1`,
@@ -3294,30 +3304,118 @@ function getPolicyCompliantTemplates(niche: string, offer: string, clientName: s
     ];
   }
 
+  if (n === 'appraisal_real_estate' || n.includes('appraisal') || n.includes('real estate')) {
+    return [
+      {
+        id: `copy-${Date.now()}-1`,
+        versionLabel: 'Option 1 – Estate & Legal Valuation (Probate & Divorce)',
+        primaryText: `Navigating an estate settlement, probate, or divorce in ${loc}? Get an objective, USPAP-certified real estate valuation you can rely on in legal and financial proceedings. ${biz} delivers fast, defensible appraisal reports with zero guesswork.`,
+        headline: `${offer} | Certified Appraisals`,
+        description: 'Fast turnaround. Certified & defensible.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        id: `copy-${Date.now()}-2`,
+        versionLabel: 'Option 2 – Homeowners & Refinancing',
+        primaryText: `Planning to sell, remove PMI, or evaluate property equity in ${loc}? ${biz} provides comprehensive residential appraisal services. Know the true, unbiased market value of your property backed by verified local comp data.`,
+        headline: `Accurate Home Valuations in ${loc}`,
+        description: 'Independent licensed property appraisers.',
+        callToAction: 'GET_QUOTE',
+      },
+      {
+        id: `copy-${Date.now()}-3`,
+        versionLabel: 'Option 3 – Real Estate Investors & Private Sellers',
+        primaryText: `Need a reliable valuation before making an offer or dividing assets in ${loc}? ${biz} specializes in thorough, independent real estate appraisals. Friendly local service, fast scheduling, and clear, detailed reports.`,
+        headline: `${offer} – ${biz}`,
+        description: 'Serving all of ${loc} and surrounding areas.',
+        callToAction: 'CONTACT_US',
+      }
+    ];
+  }
+
+  if (n === 'digital_product' || n.includes('digital') || n.includes('guide')) {
+    return [
+      {
+        id: `copy-${Date.now()}-1`,
+        versionLabel: 'Option 1 – Benefit-Focused & Action-Oriented',
+        primaryText: `Ready to get real results without wasting hours on conflicting advice? Download "${offer}" from ${biz}. A practical, step-by-step digital guide packed with proven strategies you can put into practice today.`,
+        headline: `Download Your Free Guide Now`,
+        description: 'Instant digital download. Direct access.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        id: `copy-${Date.now()}-2`,
+        versionLabel: 'Option 2 – Plain-Language Solution',
+        primaryText: `Stop overcomplicating your process. ${biz} created "${offer}" to give you a clear, no-nonsense roadmap that cuts through the noise. Simple frameworks, actionable steps, and immediate access.`,
+        headline: `${offer} | Instant Download`,
+        description: 'Start seeing results today.',
+        callToAction: 'LEARN_MORE',
+      },
+      {
+        id: `copy-${Date.now()}-3`,
+        versionLabel: 'Option 3 – Direct Access & Practical Tools',
+        primaryText: `Get the exact system used by top performers. With "${offer}", you will discover actionable takeaways you can apply right away. Tap below for immediate instant access.`,
+        headline: `Get Instant Access: ${offer}`,
+        description: 'Free digital copy. Instant delivery.',
+        callToAction: 'LEARN_MORE',
+      }
+    ];
+  }
+
+  if (n === 'marketing_business' || n.includes('marketing') || n.includes('business')) {
+    return [
+      {
+        id: `copy-${Date.now()}-1`,
+        versionLabel: 'Option 1 – Local Service Business Owners',
+        primaryText: `Running a local service business in ${loc}? Build a dependable stream of qualified inquiries every single week. ${biz} helps business owners attract ideal clients consistently with proven marketing systems.`,
+        headline: `${offer} for Local Businesses`,
+        description: 'Free strategy review for business owners.',
+        callToAction: 'GET_QUOTE',
+      },
+      {
+        id: `copy-${Date.now()}-2`,
+        versionLabel: 'Option 2 – Consistent Client Pipeline',
+        primaryText: `Stop relying on unpredictable word-of-mouth. Join other local owners in ${loc} who use ${biz} to scale their inquiries, appointments, and client revenue with zero tech headaches.`,
+        headline: `Grow Your Local Business in ${loc}`,
+        description: 'Book your free strategy consultation.',
+        callToAction: 'CONTACT_US',
+      },
+      {
+        id: `copy-${Date.now()}-3`,
+        versionLabel: 'Option 3 – Straightforward Growth Plan',
+        primaryText: `Ready to take your business to the next level in ${loc}? Take advantage of ${biz}’s ${offer}. Clear, predictable customer acquisition designed specifically for service business owners.`,
+        headline: `Claim Your Growth Strategy: ${offer}`,
+        description: 'Custom tailored plan for your business.',
+        callToAction: 'LEARN_MORE',
+      }
+    ];
+  }
+
+  // Other / Generic / Neutral Fallback (user can edit everything)
   return [
     {
       id: `copy-${Date.now()}-1`,
-      versionLabel: 'Option 1 – Plain & Local',
-      primaryText: `Looking to improve your home in ${loc}? ${biz} is offering ${offer} for local homeowners this month. Transparent quotes, clean work sites, and experienced local specialists who respect your time and budget.`,
+      versionLabel: 'Option 1 – Clear & Local',
+      primaryText: `Looking for dependable service in ${loc}? ${biz} is proud to offer ${offer}. Experienced specialists, honest communication, and prompt local service tailored to your needs.`,
       headline: `${offer} in ${loc}`,
-      description: 'Free estimate in under 2 minutes.',
+      description: 'Quick response. Tap to learn more.',
       callToAction: 'GET_QUOTE',
     },
     {
       id: `copy-${Date.now()}-2`,
-      versionLabel: 'Option 2 – Neighbor Recommended',
-      primaryText: `Join hundreds of satisfied ${loc} homeowners who rely on ${biz}. Claim our seasonal feature: ${offer}. No obligation, no pushy sales reps—just honest advice from your local service crew.`,
+      versionLabel: 'Option 2 – Community Focus',
+      primaryText: `Join satisfied clients throughout ${loc} who trust ${biz}. Take advantage of our featured offer: ${offer}. Straightforward answers and transparent pricing from your trusted local team.`,
       headline: `${biz} – ${offer}`,
-      description: 'Serving all of ${loc} & nearby.',
+      description: 'Serving ${loc} & neighboring areas.',
       callToAction: 'LEARN_MORE',
     },
     {
       id: `copy-${Date.now()}-3`,
       versionLabel: 'Option 3 – Straightforward Value',
-      primaryText: `Make the most of your home investment with ${biz}. For a limited time in ${loc}, take advantage of ${offer}. Tap below to request your fast, customized quote.`,
+      primaryText: `Make the most of your investment with ${biz}. For a limited time in ${loc}, take advantage of ${offer}. Tap below to request more information or schedule your service.`,
       headline: `Claim Your ${offer}`,
       description: 'Quick local response today.',
-      callToAction: 'GET_QUOTE',
+      callToAction: 'CONTACT_US',
     }
   ];
 }
@@ -3385,11 +3483,36 @@ app.post('/api/gemini/image', requireAdmin, async (req: Request, res: Response) 
     home_services: {
       square: 'https://images.unsplash.com/photo-1621905251189-08b45d6a269e?auto=format&fit=crop&w=1080&q=80',
       vertical: 'https://images.unsplash.com/photo-1581578731548-c64695cc6952?auto=format&fit=crop&w=1080&h=1920&q=80',
+    },
+    appraisal_real_estate: {
+      square: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=1080&q=80',
+      vertical: 'https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=1080&h=1920&q=80',
+    },
+    digital_product: {
+      square: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=1080&q=80',
+      vertical: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1080&h=1920&q=80',
+    },
+    marketing_business: {
+      square: 'https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&w=1080&q=80',
+      vertical: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1080&h=1920&q=80',
+    },
+    other: {
+      square: 'https://images.unsplash.com/photo-1497366216548-37526070297c?auto=format&fit=crop&w=1080&q=80',
+      vertical: 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1080&h=1920&q=80',
     }
   };
 
-  const selectedNiche = (niche in nichePhotos) ? niche : 'med_spa';
-  const imgPack = nichePhotos[selectedNiche];
+  const cleanNiche = (niche || '').toLowerCase();
+  const selectedNiche = (cleanNiche in nichePhotos)
+    ? cleanNiche
+    : cleanNiche.includes('real estate') || cleanNiche.includes('appraisal')
+    ? 'appraisal_real_estate'
+    : cleanNiche.includes('digital') || cleanNiche.includes('guide')
+    ? 'digital_product'
+    : cleanNiche.includes('marketing') || cleanNiche.includes('business')
+    ? 'marketing_business'
+    : 'other';
+  const imgPack = nichePhotos[selectedNiche] || nichePhotos.other;
   const url = isVertical ? imgPack.vertical : imgPack.square;
 
   res.json({
