@@ -318,8 +318,18 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     <Facebook className="w-3 h-3 text-blue-600" />
                     Ad Account:
                   </span>
-                  <span className="font-semibold text-slate-800 truncate max-w-[140px]">
-                    {client.linkedMeta.adAccountName || 'Direct BM Partner'}
+                  <span className="font-semibold text-slate-800 font-mono truncate max-w-[150px]" title={client.linkedMeta.adAccountId}>
+                    {client.linkedMeta.adAccountId || client.linkedMeta.adAccountName || 'Missing ID'}
+                  </span>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 flex items-center gap-1">
+                    <Facebook className="w-3 h-3 text-blue-600" />
+                    Page ID:
+                  </span>
+                  <span className={`font-semibold font-mono truncate max-w-[150px] ${client.linkedMeta.pageId ? 'text-slate-800' : 'text-amber-600'}`}>
+                    {client.linkedMeta.pageId || '⚠ Missing Page ID'}
                   </span>
                 </div>
 
@@ -699,31 +709,77 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
               </div>
 
               {/* Linked Meta Business Manager Asset IDs */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Linked Meta Ad Account Name / ID
-                  </label>
-                  <input
-                    type="text"
-                    value={adAccountName}
-                    onChange={(e) => setAdAccountName(e.target.value)}
-                    placeholder="Client Ad Account (act_...)"
-                    className="w-full border border-slate-300 rounded-lg p-2"
-                  />
+              <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-3">
+                <span className="font-bold text-slate-800 block text-[11px] uppercase">
+                  Linked Meta Business Manager Assets
+                </span>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 text-xs">
+                      Meta Ad Account ID *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={adAccountId}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setAdAccountId(val);
+                        if (!adAccountName) setAdAccountName(val);
+                      }}
+                      placeholder="e.g. act_25581724204862372 or 25581724204862372"
+                      className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-mono font-medium"
+                    />
+                    <span className="text-[10px] text-slate-500">
+                      Ad account shared to your Business Manager
+                    </span>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 text-xs">
+                      Facebook Page ID *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={pageId}
+                      onChange={(e) => setPageId(e.target.value)}
+                      placeholder="e.g. 102948192039481"
+                      className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-mono font-medium"
+                    />
+                    <span className="text-[10px] text-amber-800 font-medium">
+                      The ad posts from this Page (Required)
+                    </span>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Instagram Handle
-                  </label>
-                  <input
-                    type="text"
-                    value={instagramUsername}
-                    onChange={(e) => setInstagramUsername(e.target.value)}
-                    placeholder="@client.business"
-                    className="w-full border border-slate-300 rounded-lg p-2"
-                  />
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 text-xs">
+                      Ad Account Display Name
+                    </label>
+                    <input
+                      type="text"
+                      value={adAccountName}
+                      onChange={(e) => setAdAccountName(e.target.value)}
+                      placeholder="e.g. Client Ad Account Name"
+                      className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1 text-xs">
+                      Instagram Handle
+                    </label>
+                    <input
+                      type="text"
+                      value={instagramUsername}
+                      onChange={(e) => setInstagramUsername(e.target.value)}
+                      placeholder="@client.business"
+                      className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs"
+                    />
+                  </div>
                 </div>
               </div>
 

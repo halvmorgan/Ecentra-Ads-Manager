@@ -106,8 +106,12 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   const [previewPlatform, setPreviewPlatform] = useState<'facebook' | 'instagram'>('facebook');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [launchError, setLaunchError] = useState<string | null>(null);
+  const [failedStep, setFailedStep] = useState<string | null>(null);
+  const [metaErrorDetails, setMetaErrorDetails] = useState<any | null>(null);
   const [isGoingLive, setIsGoingLive] = useState<boolean>(false);
   const [isLiveActive, setIsLiveActive] = useState<boolean>(false);
+  const [goLiveError, setGoLiveError] = useState<string | null>(null);
+  const [goLiveSuccessResponse, setGoLiveSuccessResponse] = useState<any | null>(null);
   const [launchSuccessData, setLaunchSuccessData] = useState<any | null>(null);
 
   // Active Client
@@ -294,9 +298,33 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
     }
   };
 
-  // Launch Campaign (ALWAYS CREATED PAUSED FIRST PER SPEC)
+  // Launch Campaign (ALWAYS CREATED PAUSED FIRST PER SPEC - ZERO FAKE SUCCESS)
   const handleLaunchCampaign = async () => {
     if (!activeClient) return;
+
+    // Requirement 5: Facebook Page ID check. If empty, stop before calling Meta and tell user to fill it in.
+    const pageId = (activeClient.linkedMeta?.pageId || '').trim();
+    if (!pageId) {
+      setLaunchError(`Facebook Page ID is missing for client "${activeClient.businessName}". The ad must post from a Facebook Page. Please enter the Page ID in Edit Client Setup before launching.`);
+      setFailedStep('Facebook Page ID Check');
+      setMetaErrorDetails({
+        message: 'Facebook Page ID required to create ad creative and publish ads.',
+        code: 100,
+      });
+      return;
+    }
+
+    // Requirement 2: Linked Ad Account ID check
+    const adAccountId = (activeClient.linkedMeta?.adAccountId || '').trim();
+    if (!adAccountId) {
+      setLaunchError(`Linked Meta Ad Account ID is missing for client "${activeClient.businessName}". Please enter the Ad Account ID (e.g. act_25581724204862372) in Edit Client Setup.`);
+      setFailedStep('Meta Ad Account Check');
+      setMetaErrorDetails({
+        message: 'Missing linked Meta Ad Account ID on client profile.',
+        code: 100,
+      });
+      return;
+    }
 
     // Requirement 4: Block launch if no location is selected
     const hasLocation = Boolean(
@@ -306,13 +334,20 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
     );
 
     if (!hasLocation) {
-      setLaunchError('Pick a location first.');
+      setLaunchError('Pick a location first in Step 4.');
+      setFailedStep('Location Check');
       return;
     }
 
     setIsLaunching(true);
     setLaunchError(null);
+    setFailedStep(null);
+    setMetaErrorDetails(null);
+    setGoLiveError(null);
+    setGoLiveSuccessResponse(null);
+
     try {
+      // Requirement 4: Use exactly the text typed or edited in Step 2
       const payload = {
         clientId: activeClient.id,
         offerTitle: offerText,
@@ -347,23 +382,29 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       onCampaignCreated();
     } catch (err: any) {
       console.error('Failed to launch campaign:', err);
-      setLaunchError(err.message || 'Failed to stage Meta campaign. Check settings & ad account access.');
+      setLaunchError(err.message || 'Meta ad creation failed. Check settings & ad account access.');
+      setFailedStep(err.failedStep || 'Meta Marketing API');
+      setMetaErrorDetails(err.metaError || null);
     } finally {
       setIsLaunching(false);
     }
   };
 
-  // Go Live immediately from post-launch screen
+  // Go Live immediately from post-launch screen (Requirement 7: Zero Fake Success)
   const handleGoLive = async () => {
     const campaignId = launchSuccessData?.campaign?.id || launchSuccessData?.id;
     if (!campaignId) return;
     setIsGoingLive(true);
+    setGoLiveError(null);
+    setGoLiveSuccessResponse(null);
     try {
-      await api.goLive(campaignId);
+      const res = await api.goLive(campaignId);
       setIsLiveActive(true);
+      setGoLiveSuccessResponse(res.metaResponse || { status: 'ACTIVE', message: 'Campaign and ads set to ACTIVE on Meta.' });
       onCampaignCreated();
     } catch (err: any) {
-      alert(err.message || 'Failed to activate campaign on Meta');
+      console.error('Failed to activate campaign on Meta:', err);
+      setGoLiveError(err.message || 'Failed to activate campaign on Meta');
     } finally {
       setIsGoingLive(false);
     }
@@ -1478,19 +1519,58 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     </div>
                   </div>
 
-                  {/* Launch Error Notice */}
+                  {/* Launch Error Notice - Red Error Box showing exact Meta message and code */}
                   {launchError && (
-                    <div className="mt-4 bg-red-50 p-4 rounded-xl border border-red-200 text-red-900 text-xs flex items-start gap-3">
-                      <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
-                      <div className="space-y-1">
-                        <span className="font-bold text-red-800 block">Meta Marketing API Error:</span>
-                        <p className="font-mono text-[11px] bg-red-100/60 p-2 rounded text-red-950 break-words">
-                          {launchError}
-                        </p>
-                        <p className="text-[11px] text-red-700">
-                          No orphaned assets were left behind (safe rollback executed). Check your Meta Business Manager token or ad account permissions in Settings.
-                        </p>
+                    <div className="mt-5 bg-red-50 p-4 rounded-xl border border-red-300 text-red-950 text-xs space-y-2.5 shadow-sm">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+                          <span className="font-bold text-red-900 text-sm">
+                            Meta Marketing API Error
+                          </span>
+                        </div>
+                        {failedStep && (
+                          <span className="px-2 py-0.5 bg-red-200/90 text-red-900 rounded font-mono text-[10px] font-bold uppercase tracking-wider">
+                            Failed Step: {failedStep}
+                          </span>
+                        )}
                       </div>
+
+                      <div className="bg-red-100/80 p-3 rounded-lg border border-red-200 font-mono text-[11px] text-red-950 break-words leading-relaxed">
+                        {launchError}
+                      </div>
+
+                      {metaErrorDetails && (
+                        <div className="bg-white/90 p-3 rounded-lg border border-red-200 text-[11px] space-y-1 font-mono text-slate-800 shadow-2xs">
+                          <div className="font-bold text-red-800 uppercase text-[10px] tracking-wider mb-1.5 flex items-center justify-between">
+                            <span>Meta Error Details</span>
+                            {metaErrorDetails.code !== undefined && (
+                              <span className="bg-red-100 text-red-900 px-1.5 py-0.5 rounded font-bold">
+                                Code #{metaErrorDetails.code}
+                              </span>
+                            )}
+                          </div>
+                          {metaErrorDetails.error_subcode !== undefined && (
+                            <div><span className="text-slate-500">Subcode:</span> <span className="font-semibold text-red-900">{metaErrorDetails.error_subcode}</span></div>
+                          )}
+                          {metaErrorDetails.type && (
+                            <div><span className="text-slate-500">Error Type:</span> <span>{metaErrorDetails.type}</span></div>
+                          )}
+                          {metaErrorDetails.error_user_title && (
+                            <div><span className="text-slate-500">Meta Title:</span> <span className="font-semibold">{metaErrorDetails.error_user_title}</span></div>
+                          )}
+                          {metaErrorDetails.error_user_msg && (
+                            <div><span className="text-slate-500">User Msg:</span> <span>{metaErrorDetails.error_user_msg}</span></div>
+                          )}
+                          {metaErrorDetails.fbtrace_id && (
+                            <div><span className="text-slate-500">Trace ID:</span> <span className="text-slate-600">{metaErrorDetails.fbtrace_id}</span></div>
+                          )}
+                        </div>
+                      )}
+
+                      <p className="text-[11px] text-red-800 pt-0.5 leading-normal">
+                        Safe rollback was executed (no orphaned assets left on Meta). Please check your Meta token in Settings or your client's ad account and Facebook Page permissions.
+                      </p>
                     </div>
                   )}
 
@@ -1499,74 +1579,165 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     <Clock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                     <div>
                       <span className="font-bold block">Safe Staging:</span>
-                      This campaign will be generated with status <strong className="underline">PAUSED</strong>. Harold can inspect the final configuration, targeting, and creative in the dashboard before turning it live, or activate it immediately below.
+                      This campaign will be created directly on Meta with status <strong className="underline">PAUSED</strong>. Harold can inspect the final configuration, targeting, and creative in Meta Ads Manager or activate it immediately below.
                     </div>
                   </div>
                 </div>
               ) : (
-                /* Post-Launch Summary Screen */
-                <div className="text-center py-6 space-y-4">
-                  <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto shadow-md ${
-                    isLiveActive ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-700'
-                  }`}>
-                    {isLiveActive ? <Rocket className="w-7 h-7" /> : <Check className="w-7 h-7" />}
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900">
-                      {isLiveActive ? 'Campaign is Now LIVE on Facebook & Instagram!' : 'Campaign Created Successfully (PAUSED)'}
-                    </h3>
-                    <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
-                      {isLiveActive
-                        ? 'Campaign, ad set, and creative are ACTIVE and currently delivering to your local service area.'
-                        : 'Campaign, Ad Set, Ad Creative, and Instant Form have been generated and staged in your dashboard.'}
-                    </p>
-                  </div>
+                /* Post-Launch Summary Screen - REAL META SUCCESS ONLY */
+                (() => {
+                  const campaignMetaId = launchSuccessData?.metaCampaignId || launchSuccessData?.campaign?.metaCampaignId;
+                  const adSetMetaId = launchSuccessData?.metaAdSetId || launchSuccessData?.adSet?.metaAdSetId;
+                  const adMetaId = launchSuccessData?.metaAdId || launchSuccessData?.ad?.metaAdId;
+                  const headlineSent = launchSuccessData?.headlineSent || launchSuccessData?.ad?.headline || headline;
+                  const rawAccount = activeClient?.linkedMeta?.adAccountId || launchSuccessData?.adAccountClean || '';
+                  const cleanActNum = rawAccount.replace(/^act_/i, '').trim();
+                  const adsManagerUrl = cleanActNum
+                    ? `https://adsmanager.facebook.com/adsmanager/manage/campaigns?act=${cleanActNum}`
+                    : 'https://adsmanager.facebook.com/adsmanager/manage/campaigns';
 
-                  <div className="bg-slate-50 max-w-md mx-auto p-4 rounded-xl border border-slate-200 text-left text-xs space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Client:</span>
-                      <span className="font-bold text-slate-900">{activeClient?.businessName}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Offer:</span>
-                      <span className="font-medium text-slate-800">{offerText}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Daily Budget:</span>
-                      <span className="font-semibold text-slate-900">${dailyBudget}/day</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Delivery Status:</span>
-                      {isLiveActive ? (
-                        <span className="font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
-                          ACTIVE (Delivering)
-                        </span>
-                      ) : (
-                        <span className="font-bold text-amber-700 bg-amber-100 px-2 py-0.5 rounded">PAUSED (Safe Staging)</span>
+                  return (
+                    <div className="text-center py-6 space-y-4">
+                      <div className={`w-14 h-14 rounded-full flex items-center justify-center mx-auto shadow-md ${
+                        isLiveActive ? 'bg-emerald-100 text-emerald-600' : 'bg-emerald-100 text-emerald-700'
+                      }`}>
+                        {isLiveActive ? <Rocket className="w-7 h-7" /> : <Check className="w-7 h-7" />}
+                      </div>
+
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">
+                          {isLiveActive ? 'Campaign is Now LIVE in Meta Ads Manager!' : 'Campaign Created Successfully in Meta (PAUSED)'}
+                        </h3>
+                        <p className="text-xs text-slate-500 max-w-md mx-auto mt-1">
+                          {isLiveActive
+                            ? 'Campaign, ad set, and ad creative have been activated on Meta and are currently delivering to your audience.'
+                            : 'Campaign, Ad Set, Ad Creative, and Image have been published to Meta Ads Manager in PAUSED status.'}
+                        </p>
+                      </div>
+
+                      {/* Go Live Error Notice */}
+                      {goLiveError && (
+                        <div className="bg-red-50 p-3 rounded-xl border border-red-200 text-red-900 text-xs max-w-lg mx-auto text-left flex items-start gap-2.5">
+                          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-bold block">Meta Activation Error:</span>
+                            <span className="font-mono text-[11px]">{goLiveError}</span>
+                          </div>
+                        </div>
                       )}
-                    </div>
-                  </div>
 
-                  <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
-                    {!isLiveActive && (
-                      <button
-                        onClick={handleGoLive}
-                        disabled={isGoingLive}
-                        className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
-                      >
-                        <Rocket className={`w-4 h-4 ${isGoingLive ? 'animate-bounce' : ''}`} />
-                        <span>{isGoingLive ? 'Activating on Meta...' : 'Go Live Now (Set to ACTIVE)'}</span>
-                      </button>
-                    )}
-                    <button
-                      onClick={onClose}
-                      className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
-                    >
-                      {isLiveActive ? 'View in Dashboard' : 'Keep Paused / View in Dashboard'}
-                    </button>
-                  </div>
-                </div>
+                      {/* Go Live Success Confirmation */}
+                      {goLiveSuccessResponse && (
+                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-emerald-900 text-xs max-w-lg mx-auto text-left flex items-start gap-2.5">
+                          <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                          <div>
+                            <span className="font-bold block">Meta Status Response:</span>
+                            <span className="text-[11px]">{goLiveSuccessResponse.message || 'Status successfully updated to ACTIVE.'}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Real Details Summary Card */}
+                      <div className="bg-slate-50 max-w-lg mx-auto p-4 rounded-xl border border-slate-200 text-left text-xs space-y-2.5">
+                        <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                          <span className="text-slate-500 font-medium">Client Account:</span>
+                          <span className="font-bold text-slate-900">{activeClient?.businessName}</span>
+                        </div>
+
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500 font-medium">Facebook Page ID:</span>
+                          <span className="font-mono font-semibold text-slate-800">{activeClient?.linkedMeta?.pageId || 'Linked Page'}</span>
+                        </div>
+
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500 font-medium">Meta Ad Account:</span>
+                          <span className="font-mono font-semibold text-slate-800">act_{cleanActNum}</span>
+                        </div>
+
+                        <div className="flex justify-between items-start pt-1 border-t border-slate-100">
+                          <span className="text-slate-500 font-medium shrink-0 mr-3">Real Headline Sent:</span>
+                          <span className="font-bold text-slate-900 text-right leading-tight">{headlineSent}</span>
+                        </div>
+
+                        <div className="flex justify-between items-start pt-1">
+                          <span className="text-slate-500 font-medium shrink-0 mr-3">Primary Text:</span>
+                          <span className="text-slate-700 text-right text-[11px] line-clamp-2 max-w-[280px]">
+                            {launchSuccessData?.ad?.primaryText || primaryText}
+                          </span>
+                        </div>
+
+                        <div className="flex justify-between items-center pt-1 border-t border-slate-100">
+                          <span className="text-slate-500 font-medium">Daily Budget:</span>
+                          <span className="font-bold text-slate-900">${dailyBudget}/day (${(dailyBudget * 100)}¢ in Meta)</span>
+                        </div>
+
+                        <div className="flex justify-between items-center">
+                          <span className="text-slate-500 font-medium">Delivery Status:</span>
+                          {isLiveActive ? (
+                            <span className="font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded flex items-center gap-1 text-[11px]">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 animate-pulse"></span>
+                              ACTIVE in Meta
+                            </span>
+                          ) : (
+                            <span className="font-bold text-amber-800 bg-amber-100 px-2 py-0.5 rounded text-[11px]">
+                              PAUSED (Staged in Meta)
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Real Meta IDs Section (Requirement 6) */}
+                        <div className="mt-3 pt-2.5 border-t border-slate-200 bg-white p-3 rounded-lg border space-y-1.5 font-mono text-[11px]">
+                          <div className="text-[10px] uppercase font-bold text-slate-500 tracking-wider font-sans mb-1">
+                            Verified Meta Marketing API Asset IDs
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500 font-sans">Campaign ID:</span>
+                            <span className="font-bold text-slate-900">{campaignMetaId}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500 font-sans">Ad Set ID:</span>
+                            <span className="font-bold text-slate-900">{adSetMetaId}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500 font-sans">Ad ID:</span>
+                            <span className="font-bold text-slate-900">{adMetaId}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons (Requirement 6: Open in Meta Ads Manager) */}
+                      <div className="flex flex-wrap items-center justify-center gap-3 pt-3">
+                        <a
+                          href={adsManagerUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                          <span>Open in Meta Ads Manager</span>
+                        </a>
+
+                        {!isLiveActive && (
+                          <button
+                            onClick={handleGoLive}
+                            disabled={isGoingLive}
+                            className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Rocket className={`w-4 h-4 ${isGoingLive ? 'animate-bounce' : ''}`} />
+                            <span>{isGoingLive ? 'Activating in Meta...' : 'Go Live Now (Set to ACTIVE)'}</span>
+                          </button>
+                        )}
+
+                        <button
+                          onClick={onClose}
+                          className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold transition-all shadow-sm cursor-pointer"
+                        >
+                          {isLiveActive ? 'View in Dashboard' : 'Keep Paused / View in Dashboard'}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()
               )}
             </div>
           )}

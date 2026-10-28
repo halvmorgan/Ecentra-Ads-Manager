@@ -1849,13 +1849,52 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     return res.status(400).json({ error: 'Pick a location first.' });
   }
 
-  const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
-  const token = store.metaConfig.token;
-  const adAccountId = client.linkedMeta?.adAccountId || 'act_40918820491';
-  const pageId = client.linkedMeta?.pageId || 'page_991823019';
+  // Real Meta Marketing API token check (server-stored)
+  const token = store.metaConfig.token || process.env.META_ACCESS_TOKEN || process.env.META_SYSTEM_USER_TOKEN;
+  if (!token) {
+    return res.status(400).json({
+      success: false,
+      failedStep: 'token_check',
+      error: 'No Meta access token found on server. Please save your Meta System User token in Settings before launching campaigns.',
+      metaError: {
+        message: 'Meta System User access token is missing on server.',
+        code: 190,
+      }
+    });
+  }
+
+  // Requirement 2: Use client's linked ad account
+  const rawAccountId = (client.linkedMeta?.adAccountId || '').trim();
+  if (!rawAccountId) {
+    return res.status(400).json({
+      success: false,
+      failedStep: 'ad_account_check',
+      error: `Client '${client.businessName}' has no linked Meta Ad Account ID. Please enter the Ad Account ID (e.g. act_25581724204862372) in Edit Client Setup before staging ads.`,
+      metaError: {
+        message: 'Missing linked Meta Ad Account ID on client.',
+        code: 100,
+      }
+    });
+  }
+  const cleanAccountId = rawAccountId.startsWith('act_') ? rawAccountId : `act_${rawAccountId}`;
+
+  // Requirement 5: Facebook Page ID check. If empty, stop before calling Meta.
+  const cleanPageId = (client.linkedMeta?.pageId || '').trim();
+  if (!cleanPageId) {
+    return res.status(400).json({
+      success: false,
+      failedStep: 'page_id_check',
+      error: `Facebook Page ID is missing for client '${client.businessName}'. The ad must post from a Facebook Page. Please enter the Page ID in Edit Client Setup before launching.`,
+      metaError: {
+        message: 'Facebook Page ID required to post ads.',
+        code: 100,
+      }
+    });
+  }
+
   const instagramId = client.linkedMeta?.instagramId;
 
-  // Track created IDs for rollback
+  // Track created entities for rollback if any subsequent step fails
   const createdEntities: { type: string; id: string }[] = [];
 
   let metaImageHash = '';
@@ -1864,6 +1903,7 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
   let metaAdSetId = '';
   let metaCreativeId = '';
   let metaAdId = '';
+  let currentStepName = 'campaign';
 
   // Special Category Rule Enforcement
   const isSpecialCategory = specialCategory && specialCategory !== 'NONE';
@@ -1873,180 +1913,216 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
   const effectiveRadius = isSpecialCategory ? Math.max(Number(radiusMiles) || 15, 15) : (Number(radiusMiles) || 15);
   const destinationLink = websiteUrl || client.websiteUrl || 'https://ecentraconcierge.com';
 
-  if (isLive) {
-    try {
-      // 1. Upload Ad Image
-      metaImageHash = await uploadImageToMeta(adAccountId, imageUrl, token);
+  try {
+    // ------------------------------------------------------------------------
+    // Step a. Campaign:
+    // objective: OUTCOME_TRAFFIC (website clicks) or OUTCOME_LEADS (Facebook form)
+    // status: PAUSED
+    // If Housing: special_ad_categories ["HOUSING"], special_ad_category_country ["US"]
+    // is_adset_budget_sharing_enabled: false (budget set at ad set level)
+    // ------------------------------------------------------------------------
+    currentStepName = 'campaign';
+    const campaignPayload: any = {
+      name: `${client.businessName} - ${headline || offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Traffic Campaign' : 'Lead Campaign')}`,
+      objective: goalType === 'TRAFFIC_WEBSITE' ? 'OUTCOME_TRAFFIC' : 'OUTCOME_LEADS',
+      status: 'PAUSED',
+      is_adset_budget_sharing_enabled: false,
+      special_ad_categories: isSpecialCategory ? [specialCategory] : [],
+    };
+    if (isSpecialCategory) {
+      campaignPayload.special_ad_category_country = ['US'];
+    }
 
-      // 2. Create Instant Form ONLY if goal is LEAD_GEN
-      if (goalType === 'LEAD_GEN') {
-        metaFormId = await createMetaInstantForm(pageId, {
-          name: `${offerTitle} Lead Form`,
-          customQuestions: [customQuestions?.q1, customQuestions?.q2].filter(Boolean),
-          privacyPolicyUrl: privacyPolicyUrl || `${client.websiteUrl}/privacy`,
-          thankYouPhone: thankYouPhone || client.phone,
-          thankYouMessage: req.body.thankYouMessage || 'Thank you! We will reach out shortly.',
-        }, token);
-        createdEntities.push({ type: 'form', id: metaFormId });
+    const campaignRes = await callMetaApi(`${cleanAccountId}/campaigns`, {
+      method: 'POST',
+      token,
+      body: campaignPayload,
+    });
+    metaCampaignId = campaignRes.id;
+    createdEntities.push({ type: 'campaign', id: metaCampaignId });
+
+    // ------------------------------------------------------------------------
+    // Step b. Ad Set:
+    // daily_budget in cents (for example $1/day = 100)
+    // billing_event: IMPRESSIONS
+    // optimization_goal: LINK_CLICKS for website traffic, destination_type: WEBSITE
+    // Targeting: location from Step 4, age 18 to 65, all genders, FB & IG feeds, Stories & Reels
+    // status: PAUSED
+    // ------------------------------------------------------------------------
+    currentStepName = 'ad set';
+    const geoLocations: any = {};
+    if (locationType === 'region' || locationType === 'state') {
+      if (!locationKey) {
+        return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
       }
+      geoLocations.regions = [{ key: String(locationKey) }];
+    } else if (locationKey && (locationType === 'city' || !latitude)) {
+      geoLocations.cities = [{
+        key: String(locationKey),
+        radius: effectiveRadius,
+        distance_unit: 'mile',
+      }];
+    } else if (latitude && longitude) {
+      geoLocations.custom_locations = [{
+        latitude: Number(latitude),
+        longitude: Number(longitude),
+        radius: effectiveRadius,
+        distance_unit: 'mile',
+      }];
+    } else if (city && String(city).trim()) {
+      geoLocations.cities = [{
+        name: String(city).trim(),
+        radius: effectiveRadius,
+        distance_unit: 'mile',
+      }];
+    } else {
+      return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
+    }
 
-      // 3. Create Campaign (OUTCOME_LEADS vs OUTCOME_TRAFFIC, special_ad_categories)
-      const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
-      const campaignPayload: any = {
-        name: `${client.businessName} - ${offerTitle || (goalType === 'TRAFFIC_WEBSITE' ? 'Website Traffic' : 'Lead Gen')}`,
-        objective: goalType === 'TRAFFIC_WEBSITE' ? 'OUTCOME_TRAFFIC' : 'OUTCOME_LEADS',
-        status: 'PAUSED',
-        special_ad_categories: isSpecialCategory ? [specialCategory] : [],
-      };
-      if (isSpecialCategory) {
-        campaignPayload.special_ad_category_country = ['US'];
-      }
+    const dailyBudgetCents = Math.round((Number(dailyBudget) || 1) * 100);
 
-      const campaignRes = await callMetaApi(`${cleanAccountId}/campaigns`, {
-        method: 'POST',
-        token,
-        body: campaignPayload,
-      });
-      metaCampaignId = campaignRes.id;
-      createdEntities.push({ type: 'campaign', id: metaCampaignId });
+    const adSetPayload: any = {
+      name: `${headline || offerTitle || 'Ad Set'} - Targeting`,
+      campaign_id: metaCampaignId,
+      status: 'PAUSED',
+      daily_budget: dailyBudgetCents,
+      billing_event: 'IMPRESSIONS',
+      optimization_goal: goalType === 'TRAFFIC_WEBSITE' ? 'LINK_CLICKS' : 'LEAD_GENERATION',
+      destination_type: goalType === 'TRAFFIC_WEBSITE' ? 'WEBSITE' : 'ON_AD',
+      targeting: {
+        age_min: effectiveMinAge,
+        age_max: effectiveMaxAge,
+        geo_locations: geoLocations,
+        publisher_platforms: ['facebook', 'instagram'],
+        facebook_positions: ['feed', 'story'],
+        instagram_positions: ['stream', 'story', 'reels'],
+      },
+    };
 
-      // 4. Construct Targeting Geo Locations (Requirement 4 & 5: No fallbacks to Scottsdale/AZ)
-      const geoLocations: any = {};
-      if (locationType === 'region' || locationType === 'state') {
-        if (!locationKey) {
-          return res.status(400).json({ error: 'Pick a location first.' });
-        }
-        geoLocations.regions = [{ key: String(locationKey) }];
-      } else if (locationKey && (locationType === 'city' || !latitude)) {
-        geoLocations.cities = [{
-          key: String(locationKey),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      } else if (latitude && longitude) {
-        geoLocations.custom_locations = [{
-          latitude: Number(latitude),
-          longitude: Number(longitude),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      } else if (city && String(city).trim()) {
-        geoLocations.cities = [{
-          name: String(city).trim(),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      } else {
-        return res.status(400).json({ error: 'Pick a location first.' });
-      }
+    if (goalType === 'LEAD_GEN') {
+      adSetPayload.promoted_object = { page_id: cleanPageId };
+    }
 
-      // 5. Create Ad Set
-      const adSetPayload: any = {
-        name: `${city || client.serviceArea.city} | ${effectiveMinAge}-${effectiveMaxAge} | ${goalType === 'TRAFFIC_WEBSITE' ? 'Website Clicks' : 'Instant Leads'}`,
-        campaign_id: metaCampaignId,
-        optimization_goal: goalType === 'TRAFFIC_WEBSITE' ? 'LINK_CLICKS' : 'LEAD_GENERATION',
-        billing_event: 'IMPRESSIONS',
-        daily_budget: Math.round((Number(dailyBudget) || 50) * 100), // cents
-        targeting: {
-          age_min: effectiveMinAge,
-          age_max: effectiveMaxAge,
-          geo_locations: geoLocations,
-          publisher_platforms: ['facebook', 'instagram'],
-          facebook_positions: ['feed', 'story'],
-          instagram_positions: ['stream', 'story', 'reels'],
-        },
-        status: 'PAUSED',
-      };
-
-      if (goalType === 'TRAFFIC_WEBSITE') {
-        adSetPayload.destination_type = 'WEBSITE';
-      } else {
-        adSetPayload.promoted_object = { page_id: pageId };
-      }
-
+    if (!isSpecialCategory) {
       if (effectiveGenders === 'MEN') {
         adSetPayload.targeting.genders = [1];
       } else if (effectiveGenders === 'WOMEN') {
         adSetPayload.targeting.genders = [2];
       }
-
-      const adSetRes = await callMetaApi(`${cleanAccountId}/adsets`, {
-        method: 'POST',
-        token,
-        body: adSetPayload,
-      });
-      metaAdSetId = adSetRes.id;
-      createdEntities.push({ type: 'adset', id: metaAdSetId });
-
-      // 6. Create Ad Creative
-      const creativeBody: any = {
-        name: `${offerTitle} - Creative`,
-        object_story_spec: {
-          page_id: pageId,
-          ...(instagramId ? { instagram_actor_id: instagramId } : {}),
-          link_data: {
-            image_hash: metaImageHash,
-            message: primaryText,
-            name: headline || offerTitle,
-            description: description || '',
-            call_to_action: {
-              type: callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE'),
-              value: goalType === 'TRAFFIC_WEBSITE'
-                ? { link: destinationLink }
-                : { lead_gen_form_id: metaFormId },
-            },
-            ...(goalType === 'TRAFFIC_WEBSITE' ? { link: destinationLink } : {}),
-          },
-        },
-      };
-
-      const creativeRes = await callMetaApi(`${cleanAccountId}/adcreatives`, {
-        method: 'POST',
-        token,
-        body: creativeBody,
-      });
-      metaCreativeId = creativeRes.id;
-      createdEntities.push({ type: 'creative', id: metaCreativeId });
-
-      // 7. Create Ad (status = PAUSED)
-      const adRes = await callMetaApi(`${cleanAccountId}/ads`, {
-        method: 'POST',
-        token,
-        body: {
-          name: `${offerTitle || 'Ad'} - Creative #1`,
-          adset_id: metaAdSetId,
-          creative: { creative_id: metaCreativeId },
-          status: 'PAUSED',
-        },
-      });
-      metaAdId = adRes.id;
-      createdEntities.push({ type: 'ad', id: metaAdId });
-
-    } catch (metaErr: any) {
-      console.error('Meta Ad Creation Pipeline Failed. Initiating Rollback:', metaErr);
-      // ROLLBACK: Delete any created entities on Meta
-      for (const ent of createdEntities.reverse()) {
-        try {
-          await callMetaApi(ent.id, { method: 'DELETE', token });
-        } catch (cleanupErr) {
-          console.error(`Rollback error for ${ent.type} (${ent.id}):`, cleanupErr);
-        }
-      }
-
-      return res.status(400).json({
-        error: `Meta Marketing API Error: ${metaErr.message}`,
-        metaError: metaErr.metaError,
-        cleanedUp: true,
-      });
     }
-  } else {
-    // Demo Mode ID Generation
-    const rand = Math.floor(Math.random() * 90000000 + 10000000);
-    metaCampaignId = `meta_camp_${rand}`;
-    metaAdSetId = `meta_adset_${rand}`;
-    metaCreativeId = `meta_creative_${rand}`;
-    metaAdId = `meta_ad_${rand}`;
-    metaFormId = goalType === 'LEAD_GEN' ? `meta_form_${rand}` : '';
+
+    const adSetRes = await callMetaApi(`${cleanAccountId}/adsets`, {
+      method: 'POST',
+      token,
+      body: adSetPayload,
+    });
+    metaAdSetId = adSetRes.id;
+    createdEntities.push({ type: 'adset', id: metaAdSetId });
+
+    // ------------------------------------------------------------------------
+    // Step c. Image:
+    // upload selected creative image to client's ad account (adimages) and get its image hash
+    // ------------------------------------------------------------------------
+    currentStepName = 'image';
+    metaImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
+
+    // If goalType is LEAD_GEN, create or prepare Instant Form on client's page
+    if (goalType === 'LEAD_GEN') {
+      currentStepName = 'lead form';
+      metaFormId = await createMetaInstantForm(cleanPageId, {
+        name: `${headline || offerTitle} Lead Form`,
+        customQuestions: [customQuestions?.q1, customQuestions?.q2].filter(Boolean),
+        privacyPolicyUrl: privacyPolicyUrl || `${client.websiteUrl}/privacy`,
+        thankYouPhone: thankYouPhone || client.phone,
+        thankYouMessage: req.body.thankYouMessage || 'Thank you! We will reach out shortly.',
+      }, token);
+      createdEntities.push({ type: 'form', id: metaFormId });
+    }
+
+    // ------------------------------------------------------------------------
+    // Step d. Ad Creative:
+    // object_story_spec with client's Facebook Page ID and link_data containing:
+    // link = destination URL, message = Primary Text, name = Headline, description = Description,
+    // image_hash from step c, call_to_action type from CTA button with same link
+    // ------------------------------------------------------------------------
+    currentStepName = 'creative';
+    const ctaType = callToAction || (goalType === 'TRAFFIC_WEBSITE' ? 'LEARN_MORE' : 'GET_QUOTE');
+    const linkData: any = {
+      link: destinationLink,
+      message: primaryText,
+      name: headline || offerTitle,
+      description: description || '',
+      image_hash: metaImageHash,
+      call_to_action: {
+        type: ctaType,
+        value: goalType === 'TRAFFIC_WEBSITE'
+          ? { link: destinationLink }
+          : { lead_gen_form_id: metaFormId },
+      },
+    };
+
+    const creativePayload: any = {
+      name: `${headline || offerTitle} - Creative`,
+      object_story_spec: {
+        page_id: cleanPageId,
+        ...(instagramId ? { instagram_actor_id: instagramId } : {}),
+        link_data: linkData,
+      },
+    };
+
+    const creativeRes = await callMetaApi(`${cleanAccountId}/adcreatives`, {
+      method: 'POST',
+      token,
+      body: creativePayload,
+    });
+    metaCreativeId = creativeRes.id;
+    createdEntities.push({ type: 'creative', id: metaCreativeId });
+
+    // ------------------------------------------------------------------------
+    // Step e. Ad:
+    // uses creative from step d, status PAUSED
+    // ------------------------------------------------------------------------
+    currentStepName = 'ad';
+    const adRes = await callMetaApi(`${cleanAccountId}/ads`, {
+      method: 'POST',
+      token,
+      body: {
+        name: `${headline || offerTitle || 'Ad'} - Creative #1`,
+        adset_id: metaAdSetId,
+        creative: { creative_id: metaCreativeId },
+        status: 'PAUSED',
+      },
+    });
+    metaAdId = adRes.id;
+    createdEntities.push({ type: 'ad', id: metaAdId });
+
+  } catch (metaErr: any) {
+    console.error(`Meta Ad Creation Failed at step [${currentStepName}]:`, metaErr);
+    // ROLLBACK: Delete any created entities on Meta in reverse order
+    for (const ent of createdEntities.reverse()) {
+      try {
+        await callMetaApi(ent.id, { method: 'DELETE', token });
+      } catch (cleanupErr: any) {
+        console.error(`Rollback error for ${ent.type} (${ent.id}):`, cleanupErr.message);
+      }
+    }
+
+    const metaErrorObj = metaErr.metaError || {
+      message: metaErr.message,
+      code: metaErr.code || 400,
+      error_subcode: metaErr.error_subcode,
+      type: metaErr.type,
+      error_user_title: metaErr.error_user_title,
+      error_user_msg: metaErr.error_user_msg,
+    };
+
+    return res.status(400).json({
+      success: false,
+      failedStep: currentStepName,
+      error: `Meta call failed at step [${currentStepName}]: ${metaErr.message}`,
+      metaError: metaErrorObj,
+      cleanedUp: true,
+    });
   }
 
   const timestamp = Date.now();
@@ -2127,47 +2203,68 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
     campaign: newCampaign,
     adSet: newAdSet,
     ad: newAd,
-    isLive,
-    message: isLive 
-      ? 'Campaign, Ad Set, and Ad created directly on Meta as PAUSED. Click "Go Live" whenever you are ready.'
-      : 'Campaign created as PAUSED. You can review the summary and click "Go Live" whenever you are ready.',
+    metaCampaignId,
+    metaAdSetId,
+    metaAdId,
+    metaCreativeId,
+    headlineSent: headline || offerTitle,
+    adAccountClean: cleanAccountId.replace(/^act_/i, ''),
+    message: 'Campaign, Ad Set, Creative, and Ad created directly in Meta Ads Manager as PAUSED.',
   });
 });
 
-// "Go Live" Endpoint: Sets campaign, ad set, and ad to ACTIVE (ADMIN PROTECTED - Requirement 2)
+// "Go Live" Endpoint: Sets campaign, ad set, and ad to ACTIVE (ADMIN PROTECTED - Requirement 7: Zero Fake Success)
 app.post('/api/campaigns/:id/golive', requireAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
   const campaign = store.campaigns.find(c => c.id === id);
   if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
-  const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
-  const token = store.metaConfig.token;
+  const token = store.metaConfig.token || process.env.META_ACCESS_TOKEN || process.env.META_SYSTEM_USER_TOKEN;
+  if (!token) {
+    return res.status(400).json({
+      success: false,
+      error: 'No Meta access token found on server. Cannot set campaign live in Meta.',
+      metaError: { message: 'Missing Meta access token on server.', code: 190 }
+    });
+  }
 
-  if (isLive && campaign.metaCampaignId) {
-    try {
-      await callMetaApi(campaign.metaCampaignId, {
-        method: 'POST',
-        token,
-        body: { status: 'ACTIVE' },
-      });
+  if (!campaign.metaCampaignId || campaign.metaCampaignId.startsWith('meta_camp_')) {
+    return res.status(400).json({
+      success: false,
+      error: 'This campaign does not have a real Meta Campaign ID. Please stage a new campaign to create real Meta assets.',
+      metaError: { message: 'No valid Meta Campaign ID found on campaign.', code: 100 }
+    });
+  }
 
-      // Also set ad sets & ads to ACTIVE
-      const childAdSets = store.adSets.filter(as => as.campaignId === id);
-      for (const as of childAdSets) {
-        if (as.metaAdSetId) {
-          await callMetaApi(as.metaAdSetId, { method: 'POST', token, body: { status: 'ACTIVE' } });
-        }
+  try {
+    // 1. Activate Campaign in Meta
+    await callMetaApi(campaign.metaCampaignId, {
+      method: 'POST',
+      token,
+      body: { status: 'ACTIVE' },
+    });
+
+    // 2. Activate child Ad Sets in Meta
+    const childAdSets = store.adSets.filter(as => as.campaignId === id);
+    for (const as of childAdSets) {
+      if (as.metaAdSetId && !as.metaAdSetId.startsWith('meta_adset_')) {
+        await callMetaApi(as.metaAdSetId, { method: 'POST', token, body: { status: 'ACTIVE' } });
       }
-
-      const childAds = store.ads.filter(ad => ad.campaignId === id);
-      for (const ad of childAds) {
-        if (ad.metaAdId) {
-          await callMetaApi(ad.metaAdId, { method: 'POST', token, body: { status: 'ACTIVE' } });
-        }
-      }
-    } catch (err: any) {
-      return res.status(400).json({ error: `Meta Error setting campaign live: ${err.message}` });
     }
+
+    // 3. Activate child Ads in Meta
+    const childAds = store.ads.filter(ad => ad.campaignId === id);
+    for (const ad of childAds) {
+      if (ad.metaAdId && !ad.metaAdId.startsWith('meta_ad_')) {
+        await callMetaApi(ad.metaAdId, { method: 'POST', token, body: { status: 'ACTIVE' } });
+      }
+    }
+  } catch (err: any) {
+    return res.status(400).json({
+      success: false,
+      error: `Meta Error setting campaign live: ${err.message}`,
+      metaError: err.metaError || { message: err.message, code: (err as any).code || 400 }
+    });
   }
 
   campaign.status = 'ACTIVE';
@@ -2178,7 +2275,15 @@ app.post('/api/campaigns/:id/golive', requireAdmin, async (req: Request, res: Re
   });
   persist();
 
-  res.json({ success: true, campaign });
+  res.json({
+    success: true,
+    campaign,
+    metaResponse: {
+      campaignId: campaign.metaCampaignId,
+      status: 'ACTIVE',
+      message: 'Campaign, ad set, and ad successfully set to ACTIVE in Meta.'
+    }
+  });
 });
 
 // Toggle Pause / Resume on Campaign, AdSet, or Ad (ADMIN PROTECTED - Requirement 2)

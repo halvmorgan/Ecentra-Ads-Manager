@@ -347,7 +347,13 @@ export const api = {
       body: JSON.stringify(payload),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Campaign staging failed');
+    if (!res.ok) {
+      const err: any = new Error(data.error || 'Campaign staging failed');
+      err.failedStep = data.failedStep;
+      err.metaError = data.metaError;
+      err.details = data;
+      throw err;
+    }
     return data;
   },
 
@@ -359,7 +365,12 @@ export const api = {
       headers,
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to set campaign live on Meta');
+    if (!res.ok) {
+      const err: any = new Error(data.error || 'Failed to set campaign live on Meta');
+      err.metaError = data.metaError;
+      err.details = data;
+      throw err;
+    }
     return data;
   },
 
