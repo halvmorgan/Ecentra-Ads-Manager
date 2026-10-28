@@ -2145,6 +2145,7 @@ app.post('/api/campaigns/create', requireAdmin, async (req: Request, res: Respon
       status: 'PAUSED',
       daily_budget: dailyBudgetCents,
       billing_event: 'IMPRESSIONS',
+      bid_strategy: 'LOWEST_COST_WITHOUT_CAP',
       optimization_goal: goalType === 'TRAFFIC_WEBSITE' ? 'LINK_CLICKS' : 'LEAD_GENERATION',
       destination_type: goalType === 'TRAFFIC_WEBSITE' ? 'WEBSITE' : 'ON_AD',
       targeting: {
