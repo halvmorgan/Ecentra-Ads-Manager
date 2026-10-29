@@ -265,7 +265,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
         setSpecialCategory('NONE');
         setGoalType('LEAD_GEN');
         setOfferText('$99 First Glow Facial + Skin Consultation');
-        setImagePrompt('Warm, tranquil treatment room with aesthetician in Scottsdale boutique med spa');
+        setImagePrompt('Warm, tranquil treatment room with aesthetician in boutique med spa');
         setCallToAction('BOOK_NOW');
         setMinAge(25);
         setMaxAge(60);

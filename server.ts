@@ -12,6 +12,8 @@ import {
   doc,
   getDoc,
   setDoc,
+  updateDoc,
+  deleteField,
   collection,
   getDocs,
   writeBatch,
@@ -99,6 +101,11 @@ function sanitizeClient(client: any) {
   const clone = { ...client };
   if (clone.isOwnBusiness) {
     delete clone.clientAccessCode;
+  }
+  const resolvedPhone = clone.contactPhone || clone.phone || clone.alertPhone;
+  if (resolvedPhone) {
+    clone.phone = resolvedPhone;
+    clone.contactPhone = resolvedPhone;
   }
   if (clone.ghlConfig) {
     const { apiKey, ...safeGhl } = clone.ghlConfig;
@@ -434,19 +441,18 @@ async function getClientsFromDb(): Promise<any[]> {
             id: 'client-the-home-value-worksheet',
             businessName: 'The Home Value Worksheet',
             niche: 'appraisal_real_estate',
-            websiteUrl: 'https://thehomevalueworksheet.com',
+            websiteUrl: 'https://ecenturyappraisal.com/home-value-worksheet',
             serviceArea: {
-              city: 'Phoenix',
-              state: 'AZ',
-              radiusMiles: 25,
+              city: 'Flint',
+              state: 'MI',
+              radiusMiles: 50,
             },
-            phone: '(480) 250-1234',
+            phone: '(810) 510-3406',
             alertEmail: 'halvmorgan@gmail.com',
-            alertPhone: '(480) 250-1234',
-            monthlyBudget: 2500,
-            targetCpl: 30,
-            isOwnBusiness: false,
-            clientAccessCode: 'HVW2026X',
+            alertPhone: '(810) 510-3406',
+            monthlyBudget: 30,
+            targetCpl: 0,
+            isOwnBusiness: true,
             weeklyReportEnabled: true,
             createdAt: new Date().toISOString(),
             ghlConfig: {
@@ -466,16 +472,16 @@ async function getClientsFromDb(): Promise<any[]> {
             id: 'client-ecentury-appraisal',
             businessName: 'eCentury Appraisal Services',
             niche: 'appraisal_real_estate',
-            websiteUrl: 'https://ecenturyappraisals.com',
+            websiteUrl: 'https://ecenturyappraisal.com',
             serviceArea: {
-              city: 'Scottsdale',
-              state: 'AZ',
-              radiusMiles: 25,
+              city: 'Flint',
+              state: 'MI',
+              radiusMiles: 60,
             },
-            phone: '(480) 250-1234',
+            phone: '(810) 510-3406',
             alertEmail: 'halvmorgan@gmail.com',
-            alertPhone: '(480) 250-1234',
-            monthlyBudget: 3000,
+            alertPhone: '(810) 510-3406',
+            monthlyBudget: 30,
             targetCpl: 0,
             isOwnBusiness: true,
             weeklyReportEnabled: true,
@@ -499,14 +505,14 @@ async function getClientsFromDb(): Promise<any[]> {
             niche: 'marketing_business',
             websiteUrl: 'https://ecentraconcierge.com',
             serviceArea: {
-              city: 'Phoenix',
-              state: 'AZ',
-              radiusMiles: 30,
+              city: 'Flint',
+              state: 'MI',
+              radiusMiles: 50,
             },
-            phone: '(480) 250-1234',
+            phone: '(810) 510-3406',
             alertEmail: 'halvmorgan@gmail.com',
-            alertPhone: '(480) 250-1234',
-            monthlyBudget: 5000,
+            alertPhone: '(810) 510-3406',
+            monthlyBudget: 30,
             targetCpl: 0,
             isOwnBusiness: true,
             weeklyReportEnabled: true,
@@ -703,88 +709,84 @@ async function syncFromFirestore(): Promise<void> {
     // 5. Ads
     await getAdsFromDb();
 
-    // Ensure existing campaign 120256675972580309 & ad 120256675974050309 are preserved under The Home Value Worksheet
-    const hvwClient = store.clients.find(c => 
-      c.id === 'client-the-home-value-worksheet' || 
-      c.businessName.toLowerCase().includes('home value worksheet')
-    );
-    if (hvwClient) {
-      const targetCampaignId = '120256675972580309';
-      const targetAdId = '120256675974050309';
-      const hasAd = store.ads.some(a => a.metaAdId === targetAdId || a.id === `ad-${targetAdId}`);
-      if (!hasAd) {
-        const existingCampaign = {
-          id: `camp-${targetCampaignId}`,
-          clientId: hvwClient.id,
-          name: "eCentury Appraisal Services - Find Your Home's Value Like an Appraiser",
-          objective: 'OUTCOME_LEADS',
-          status: 'PAUSED',
-          dailyBudget: 50,
-          createdAt: new Date().toISOString(),
-          metaCampaignId: targetCampaignId,
-        };
-        const existingAdSet = {
-          id: `adset-120256675973050309`,
-          campaignId: `camp-${targetCampaignId}`,
-          clientId: hvwClient.id,
-          name: "Phoenix | 25-65 | Lead Gen",
-          status: 'PAUSED',
-          dailyBudget: 50,
-          startDate: new Date().toISOString(),
-          destinationType: 'ON_AD',
-          optimizationGoal: 'LEAD_GENERATION',
-          targeting: {
-            city: hvwClient.serviceArea?.city || 'Phoenix',
-            state: hvwClient.serviceArea?.state || 'AZ',
-            radiusMiles: hvwClient.serviceArea?.radiusMiles || 25,
-            minAge: 25,
-            maxAge: 65,
-            genders: 'ALL',
-            placements: ['facebook_feed', 'instagram_feed', 'stories_reels'],
-          },
-          metaAdSetId: '120256675973050309',
-        };
-        const existingAd = {
-          id: `ad-${targetAdId}`,
-          adSetId: `adset-120256675973050309`,
-          campaignId: `camp-${targetCampaignId}`,
-          clientId: hvwClient.id,
-          name: "eCentury Appraisal Services - Find Your Home's Value Like an Appraiser",
-          status: 'PAUSED',
-          effectiveStatus: 'PAUSED',
-          goalType: 'LEAD_GEN',
-          websiteUrl: 'https://thehomevalueworksheet.com',
-          headline: "Find Your Home's Value Like an Appraiser",
-          primaryText: "Get an unbiased valuation worksheet for your home created by certified appraisers. See what real appraisers look at before making your next move.",
-          description: "Fast, accurate local home valuation worksheet.",
-          callToAction: 'GET_QUOTE',
-          imageUrl: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=1080&q=80',
-          imageFormat: '1:1',
-          dailyBudget: 50,
-          city: hvwClient.serviceArea?.city || 'Phoenix',
-          state: hvwClient.serviceArea?.state || 'AZ',
-          radiusMiles: hvwClient.serviceArea?.radiusMiles || 25,
-          createdAt: new Date().toISOString(),
-          metaCampaignId: targetCampaignId,
-          metaAdSetId: '120256675973050309',
-          metaCreativeId: '120256675974050309_cr',
-          metaAdId: targetAdId,
+    // Requirement 2: Delete made-up saved ad record for ad 120256675974050309
+    const madeUpAdIds = ['ad-120256675974050309', '120256675974050309', 'ad-meta-120256675974050309'];
+    store.ads = store.ads.filter(a => !madeUpAdIds.includes(a.id) && a.metaAdId !== '120256675974050309');
+    store.campaigns = store.campaigns.filter(c => c.id !== 'camp-120256675972580309' && c.metaCampaignId !== '120256675972580309');
+    store.adSets = store.adSets.filter(as => as.id !== 'adset-120256675973050309' && as.metaAdSetId !== '120256675973050309');
+
+    if (firestoreDb) {
+      for (const id of madeUpAdIds) {
+        deleteDoc(doc(firestoreDb, 'ads', id)).catch(() => {});
+      }
+      deleteDoc(doc(firestoreDb, 'campaigns', 'camp-120256675972580309')).catch(() => {});
+      deleteDoc(doc(firestoreDb, 'adSets', 'adset-120256675973050309')).catch(() => {});
+    }
+
+    // Requirement 1: Update the 3 clients in Cloud Firestore (match by name, keep their ids)
+    for (const c of store.clients) {
+      const lowerName = (c.businessName || '').toLowerCase();
+      let updated = false;
+
+      if (lowerName.includes('home value worksheet')) {
+        c.isOwnBusiness = true;
+        delete c.clientAccessCode;
+        c.phone = '(810) 510-3406';
+        c.contactPhone = '(810) 510-3406';
+        c.alertPhone = '(810) 510-3406';
+        c.serviceArea = { city: 'Flint', state: 'MI', radiusMiles: 50 };
+        c.websiteUrl = 'https://ecenturyappraisal.com/home-value-worksheet';
+        c.monthlyBudget = 30;
+        c.targetCpl = 0;
+        c.linkedMeta = {
+          ...c.linkedMeta,
+          adAccountId: 'act_25581724204862372',
           pageId: '959992543870563',
           pageName: 'Ecentury Appraisal Services',
         };
+        updated = true;
+      } else if (lowerName.includes('ecentury appraisal')) {
+        c.isOwnBusiness = true;
+        delete c.clientAccessCode;
+        c.phone = '(810) 510-3406';
+        c.contactPhone = '(810) 510-3406';
+        c.alertPhone = '(810) 510-3406';
+        c.serviceArea = { city: 'Flint', state: 'MI', radiusMiles: 60 };
+        c.websiteUrl = 'https://ecenturyappraisal.com';
+        c.monthlyBudget = 30;
+        c.targetCpl = 0;
+        c.linkedMeta = {
+          ...c.linkedMeta,
+          adAccountId: 'act_25581724204862372',
+          pageId: '959992543870563',
+          pageName: 'Ecentury Appraisal Services',
+        };
+        updated = true;
+      } else if (lowerName.includes('ecentra concierge')) {
+        c.isOwnBusiness = true;
+        delete c.clientAccessCode;
+        c.phone = '(810) 510-3406';
+        c.contactPhone = '(810) 510-3406';
+        c.alertPhone = '(810) 510-3406';
+        c.serviceArea = { city: 'Flint', state: 'MI', radiusMiles: 50 };
+        c.websiteUrl = 'https://ecentraconcierge.com';
+        c.monthlyBudget = 30;
+        c.targetCpl = 0;
+        c.linkedMeta = {
+          ...c.linkedMeta,
+          adAccountId: 'act_25581724204862372',
+          pageId: '1343054112229117',
+          pageName: 'Ecentra Concierge',
+        };
+        updated = true;
+      }
 
-        store.campaigns.unshift(existingCampaign);
-        store.adSets.unshift(existingAdSet);
-        store.ads.unshift(existingAd);
-
-        if (firestoreDb) {
-          try {
-            await setDoc(doc(firestoreDb, 'campaigns', existingCampaign.id), existingCampaign, { merge: true });
-            await setDoc(doc(firestoreDb, 'adSets', existingAdSet.id), existingAdSet, { merge: true });
-            await setDoc(doc(firestoreDb, 'ads', existingAd.id), existingAd, { merge: true });
-          } catch (e: any) {
-            console.warn('[Firestore] Error saving existing ad to Firestore:', e.message);
-          }
+      if (updated && firestoreDb) {
+        try {
+          const sanitized = sanitizeClient(c);
+          await setDoc(doc(firestoreDb, 'clients', c.id), sanitized);
+        } catch (updateErr: any) {
+          console.warn('[Firestore] Error updating client in Firestore:', updateErr.message);
         }
       }
     }
@@ -803,7 +805,7 @@ async function syncFromFirestore(): Promise<void> {
     });
     store.leads = leads;
 
-    // Ensure access codes for real non-own clients
+    // Ensure access codes for real non-own clients (own businesses never have codes)
     let needsResync = false;
     for (const c of store.clients) {
       if (c.isOwnBusiness && c.clientAccessCode) {
@@ -818,7 +820,7 @@ async function syncFromFirestore(): Promise<void> {
       await syncToFirestore();
     }
 
-    // 7. Scrub old brand names across Firestore collections (Requirement 4)
+    // 7. Scrub old brand names, old Phoenix/Scottsdale AZ locations and (480) 250-1234
     await scrubOldBrandNamesFromDb();
 
     lastSaveError = null;
@@ -831,26 +833,51 @@ async function syncFromFirestore(): Promise<void> {
 async function scrubOldBrandNamesFromDb(): Promise<void> {
   if (!firestoreDb) return;
   try {
-    const collectionsToScrub = ['clients', 'system', 'campaigns', 'ads'];
+    const collectionsToScrub = ['clients', 'system', 'campaigns', 'adSets', 'ads', 'leads'];
     for (const colName of collectionsToScrub) {
       const snap = await getDocs(collection(firestoreDb, colName));
       for (const d of snap.docs) {
         const data = d.data();
+
+        // Delete made-up saved ad record for ad 120256675974050309
+        if (colName === 'ads' && (d.id === 'ad-120256675974050309' || d.id === '120256675974050309' || data.metaAdId === '120256675974050309')) {
+          await deleteDoc(doc(firestoreDb, colName, d.id));
+          continue;
+        }
+        if (colName === 'campaigns' && (d.id === 'camp-120256675972580309' || data.metaCampaignId === '120256675972580309')) {
+          await deleteDoc(doc(firestoreDb, colName, d.id));
+          continue;
+        }
+        if (colName === 'adSets' && (d.id === 'adset-120256675973050309' || data.metaAdSetId === '120256675973050309')) {
+          await deleteDoc(doc(firestoreDb, colName, d.id));
+          continue;
+        }
+
         const serialized = JSON.stringify(data);
         if (
           serialized.includes('Ecentra Automation') || 
           serialized.includes('Ecentury AI') || 
           serialized.includes('eCentury AI') ||
           serialized.includes('ecentra automation') ||
-          serialized.includes('ecentury ai')
+          serialized.includes('ecentury ai') ||
+          serialized.includes('(480) 250-1234') ||
+          serialized.includes('Scottsdale') ||
+          serialized.includes('Phoenix')
         ) {
           const cleanedStr = serialized
             .replace(/Ecentra Automation/gi, 'Ecentra Concierge')
             .replace(/eCentury AI/gi, 'Ecentra Concierge')
-            .replace(/Ecentury AI/gi, 'Ecentra Concierge');
+            .replace(/Ecentury AI/gi, 'Ecentra Concierge')
+            .replace(/\(480\) 250-1234/g, '(810) 510-3406')
+            .replace(/"city":\s*"(Phoenix|Scottsdale)"/g, '"city":"Flint"')
+            .replace(/"state":\s*"AZ"/g, '"state":"MI"');
           const cleanedObj = JSON.parse(cleanedStr);
-          await setDoc(doc(firestoreDb, colName, d.id), cleanedObj, { merge: true });
-          console.log(`[Firestore Scrub] Cleaned old brand names in ${colName}/${d.id}`);
+          if (colName === 'clients') {
+            cleanedObj.isOwnBusiness = true;
+            delete cleanedObj.clientAccessCode;
+          }
+          await setDoc(doc(firestoreDb, colName, d.id), cleanedObj);
+          console.log(`[Firestore Scrub] Cleaned old data in ${colName}/${d.id}`);
         }
       }
     }
@@ -1424,14 +1451,13 @@ app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Re
 
   // Fallback curated US database (cities with coordinates, whole states like Michigan, and counties)
   const usLocations = [
-    { key: '2490299', name: 'Scottsdale', type: 'city', country_code: 'US', region: 'Arizona', latitude: 33.5092, longitude: -111.899 },
-    { key: '2489816', name: 'Phoenix', type: 'city', country_code: 'US', region: 'Arizona', latitude: 33.4484, longitude: -112.074 },
-    { key: '2479201', name: 'Denver', type: 'city', country_code: 'US', region: 'Colorado', latitude: 39.7392, longitude: -104.9903 },
+    { key: '2483256', name: 'Flint', type: 'city', country_code: 'US', region: 'Michigan', latitude: 43.0125, longitude: -83.6875 },
     { key: '2481745', name: 'Detroit', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.3314, longitude: -83.0458 },
     { key: '2483861', name: 'Grand Rapids', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.9634, longitude: -85.6681 },
     { key: '2484490', name: 'Ann Arbor', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.2808, longitude: -83.743 },
+    { key: '2484042', name: 'Lansing', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.7325, longitude: -84.5555 },
     { key: '3866', name: 'Michigan', type: 'region', country_code: 'US', region: 'United States' },
-    { key: '3847', name: 'Arizona', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '2479201', name: 'Denver', type: 'city', country_code: 'US', region: 'Colorado', latitude: 39.7392, longitude: -104.9903 },
     { key: '3852', name: 'California', type: 'region', country_code: 'US', region: 'United States' },
     { key: '3853', name: 'Colorado', type: 'region', country_code: 'US', region: 'United States' },
     { key: '3856', name: 'Florida', type: 'region', country_code: 'US', region: 'United States' },
@@ -1945,9 +1971,9 @@ app.post(['/api/backup/import', '/api/clients/import'], requireAdmin, async (req
         isOwnBusiness: isOwn,
         clientAccessCode: accessCode,
         serviceArea: {
-          city: item.serviceArea?.city || 'Phoenix',
-          state: item.serviceArea?.state || 'AZ',
-          radiusMiles: Number(item.serviceArea?.radiusMiles) || 20,
+          city: item.serviceArea?.city || 'Flint',
+          state: item.serviceArea?.state || 'MI',
+          radiusMiles: Number(item.serviceArea?.radiusMiles) || 50,
           ...item.serviceArea,
         },
         linkedMeta: item.linkedMeta || {},
@@ -2134,8 +2160,20 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
       continue;
     }
 
-    const exists = store.campaigns.find(existing => existing.metaCampaignId === c.id || existing.id === c.id);
-    if (!exists) {
+    const campDailyBudget = c.daily_budget ? Number(c.daily_budget) / 100 : undefined;
+    const exists = store.campaigns.find(existing => existing.metaCampaignId === c.id || existing.id === c.id || existing.id === `camp-meta-${c.id}`);
+    if (exists) {
+      exists.name = c.name || exists.name;
+      exists.status = c.status || exists.status;
+      if (c.objective) exists.objective = c.objective;
+      if (c.special_ad_categories) exists.specialAdCategories = c.special_ad_categories;
+      if (campDailyBudget !== undefined) exists.dailyBudget = campDailyBudget;
+      exists.metaCampaignId = c.id;
+      exists.clientId = client.id;
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, 'campaigns', exists.id), exists, { merge: true });
+      }
+    } else {
       const campObj = {
         id: `camp-meta-${c.id}`,
         clientId: client.id,
@@ -2143,7 +2181,7 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
         objective: c.objective || 'OUTCOME_LEADS',
         specialAdCategories: c.special_ad_categories || [],
         status: c.status || 'PAUSED',
-        dailyBudget: c.daily_budget ? Number(c.daily_budget) / 100 : 50,
+        dailyBudget: campDailyBudget ?? (client.monthlyBudget ? Math.round(client.monthlyBudget / 30) : 30),
         createdAt: c.created_time || new Date().toISOString(),
         metaCampaignId: c.id,
       };
@@ -2156,16 +2194,29 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
   }
 
   for (const as of metaAdSets) {
-    const exists = store.adSets.find(existing => existing.metaAdSetId === as.id || existing.id === as.id);
-    if (!exists) {
-      const matchedCamp = store.campaigns.find(c => c.metaCampaignId === as.campaign_id);
+    const asDailyBudget = as.daily_budget ? Number(as.daily_budget) / 100 : undefined;
+    const matchedCamp = store.campaigns.find(c => c.metaCampaignId === as.campaign_id);
+    const exists = store.adSets.find(existing => existing.metaAdSetId === as.id || existing.id === as.id || existing.id === `adset-meta-${as.id}`);
+
+    if (exists) {
+      exists.name = as.name || exists.name;
+      exists.status = as.status || exists.status;
+      if (asDailyBudget !== undefined) exists.dailyBudget = asDailyBudget;
+      if (as.targeting) exists.targeting = as.targeting;
+      if (matchedCamp) exists.campaignId = matchedCamp.id;
+      exists.metaAdSetId = as.id;
+      exists.clientId = client.id;
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, 'adSets', exists.id), exists, { merge: true });
+      }
+    } else {
       const adSetObj = {
         id: `adset-meta-${as.id}`,
         campaignId: matchedCamp?.id || `camp-meta-${as.campaign_id}`,
         clientId: client.id,
         name: as.name || `${clientPageName} Ad Set`,
         status: as.status || 'PAUSED',
-        dailyBudget: as.daily_budget ? Number(as.daily_budget) / 100 : 50,
+        dailyBudget: asDailyBudget ?? matchedCamp?.dailyBudget ?? (client.monthlyBudget ? Math.round(client.monthlyBudget / 30) : 30),
         startDate: as.start_time || new Date().toISOString(),
         targeting: as.targeting || {},
         metaAdSetId: as.id,
@@ -2178,42 +2229,93 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
   }
 
   for (const a of matchingAds) {
-    const exists = store.ads.find(existing => existing.metaAdId === a.id || existing.id === a.id);
-    if (!exists) {
-      const cr = a.creative || {};
-      const linkData = cr.object_story_spec?.link_data || {};
-      const matchedCamp = store.campaigns.find(c => c.metaCampaignId === a.campaign_id);
-      const matchedAdSet = store.adSets.find(as => as.metaAdSetId === a.adset_id);
+    const cr = a.creative || {};
+    const linkData = cr.object_story_spec?.link_data || {};
+    let headline = cr.title || linkData.name || '';
+    let primaryText = cr.body || linkData.message || '';
+    let description = linkData.description || '';
+    let imageUrl = cr.image_url || cr.thumbnail_url || linkData.picture || '';
+    let callToAction = cr.call_to_action_type || linkData.call_to_action?.type || '';
+    let websiteUrl = linkData.link || '';
 
-      const headline = cr.title || linkData.name || a.name || 'Ad Creative';
-      const primaryText = cr.body || linkData.message || '';
-      const description = linkData.description || '';
-      const imageUrl = cr.image_url || cr.thumbnail_url || linkData.picture || 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=1080&q=80';
-      const callToAction = cr.call_to_action_type || linkData.call_to_action?.type || 'LEARN_MORE';
-      const websiteUrl = linkData.link || client.websiteUrl || '';
-      const goalType = matchedCamp?.objective === 'OUTCOME_TRAFFIC' ? 'TRAFFIC_WEBSITE' : 'LEAD_GEN';
-      const dailyBudget = matchedAdSet?.dailyBudget || matchedCamp?.dailyBudget || 50;
+    // If creative details are missing and cr.id is present, fetch creative directly from Meta API
+    if (token && cr.id && (!headline || !primaryText)) {
+      try {
+        const fullCreative = await callMetaApi(cr.id, {
+          token,
+          params: { fields: 'id,name,title,body,image_url,thumbnail_url,object_story_spec,call_to_action_type' }
+        });
+        if (fullCreative) {
+          const spec = fullCreative.object_story_spec?.link_data || {};
+          headline = headline || fullCreative.title || spec.name || fullCreative.name || '';
+          primaryText = primaryText || fullCreative.body || spec.message || '';
+          description = description || spec.description || '';
+          imageUrl = imageUrl || fullCreative.image_url || fullCreative.thumbnail_url || spec.picture || '';
+          callToAction = callToAction || fullCreative.call_to_action_type || spec.call_to_action?.type || '';
+          websiteUrl = websiteUrl || spec.link || '';
+        }
+      } catch (err: any) {
+        console.warn(`[Creative Fetch Warning for ${cr.id}]:`, err.message);
+      }
+    }
 
+    const matchedCamp = store.campaigns.find(c => c.metaCampaignId === a.campaign_id);
+    const matchedAdSet = store.adSets.find(as => as.metaAdSetId === a.adset_id);
+    const matchedMetaAdSet = metaAdSets.find(as => as.id === a.adset_id);
+    const matchedMetaCamp = metaCampaigns.find(c => c.id === a.campaign_id);
+
+    const adsetDailyBudget = matchedMetaAdSet?.daily_budget ? Number(matchedMetaAdSet.daily_budget) / 100 : matchedAdSet?.dailyBudget;
+    const campDailyBudget = matchedMetaCamp?.daily_budget ? Number(matchedMetaCamp.daily_budget) / 100 : matchedCamp?.dailyBudget;
+    const realDailyBudget = adsetDailyBudget ?? campDailyBudget;
+
+    const existing = store.ads.find(existing => existing.metaAdId === a.id || existing.id === a.id || existing.id === `ad-meta-${a.id}` || existing.id === `ad-${a.id}`);
+
+    if (existing) {
+      existing.status = a.status || existing.status;
+      existing.effectiveStatus = a.effective_status || a.status || existing.effectiveStatus;
+      existing.name = a.name || existing.name;
+      if (headline) existing.headline = headline;
+      if (primaryText) existing.primaryText = primaryText;
+      if (description) existing.description = description;
+      if (imageUrl) existing.imageUrl = imageUrl;
+      if (websiteUrl) existing.websiteUrl = websiteUrl;
+      if (callToAction) existing.callToAction = callToAction;
+      if (realDailyBudget !== undefined) existing.dailyBudget = realDailyBudget;
+      existing.metaCampaignId = a.campaign_id || existing.metaCampaignId;
+      existing.metaAdSetId = a.adset_id || existing.metaAdSetId;
+      existing.metaAdId = a.id;
+      if (cr.id) existing.metaCreativeId = cr.id;
+      existing.clientId = client.id;
+      if (clientPageId) existing.pageId = clientPageId;
+      if (clientPageName) existing.pageName = clientPageName;
+      if (matchedCamp) existing.campaignId = matchedCamp.id;
+      if (matchedAdSet) existing.adSetId = matchedAdSet.id;
+
+      if (firestoreDb) {
+        await setDoc(doc(firestoreDb, 'ads', existing.id), existing, { merge: true });
+      }
+      recoveredAds++;
+    } else {
       const adObj = {
         id: `ad-meta-${a.id}`,
         adSetId: matchedAdSet?.id || `adset-meta-${a.adset_id}`,
         campaignId: matchedCamp?.id || `camp-meta-${a.campaign_id}`,
         clientId: client.id,
-        name: a.name || `${clientPageName} - ${headline}`,
+        name: a.name || (headline ? `${clientPageName} - ${headline}` : `${clientPageName} Ad`),
         status: a.status || 'PAUSED',
         effectiveStatus: a.effective_status || a.status || 'PAUSED',
-        goalType,
-        websiteUrl,
-        primaryText,
-        headline,
-        description,
-        callToAction,
-        imageUrl,
+        goalType: matchedCamp?.objective === 'OUTCOME_TRAFFIC' ? 'TRAFFIC_WEBSITE' : 'LEAD_GEN',
+        websiteUrl: websiteUrl || client.websiteUrl || '',
+        primaryText: primaryText || '',
+        headline: headline || a.name || 'Ad Creative',
+        description: description || '',
+        callToAction: callToAction || 'LEARN_MORE',
+        imageUrl: imageUrl || '',
         imageFormat: '1:1',
-        dailyBudget,
-        city: client.serviceArea?.city || 'Phoenix',
-        state: client.serviceArea?.state || 'AZ',
-        radiusMiles: client.serviceArea?.radiusMiles || 25,
+        dailyBudget: realDailyBudget || (client.monthlyBudget ? Math.round(client.monthlyBudget / 30) : 1),
+        city: client.serviceArea?.city || 'Flint',
+        state: client.serviceArea?.state || 'MI',
+        radiusMiles: client.serviceArea?.radiusMiles || 50,
         createdAt: a.created_time || new Date().toISOString(),
         metaCreativeId: cr.id || `cr-${a.id}`,
         metaCampaignId: a.campaign_id,
@@ -2231,92 +2333,6 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
     }
   }
 
-  // Requirement 5: Guarantee existing campaign 120256675972580309 ("eCentury Appraisal Services - Find Your Home's Value Like an Appraiser", ad 120256675974050309)
-  // shows up under "The Home Value Worksheet" client in Manage Ads after syncing.
-  if (isHomeValueClient) {
-    const existingCampIdx = store.campaigns.findIndex(c => c.metaCampaignId === '120256675972580309' || c.id === 'camp-120256675972580309');
-    const campObj = {
-      id: existingCampIdx >= 0 ? store.campaigns[existingCampIdx].id : 'camp-120256675972580309',
-      clientId: client.id,
-      name: "eCentury Appraisal Services - Find Your Home's Value Like an Appraiser",
-      objective: 'OUTCOME_LEADS',
-      specialAdCategories: [],
-      status: 'PAUSED',
-      dailyBudget: 50,
-      createdAt: new Date().toISOString(),
-      metaCampaignId: '120256675972580309',
-    };
-    if (existingCampIdx >= 0) {
-      store.campaigns[existingCampIdx] = { ...store.campaigns[existingCampIdx], ...campObj, clientId: client.id };
-    } else {
-      store.campaigns.unshift(campObj);
-      recoveredCampaigns++;
-    }
-    if (firestoreDb) {
-      await setDoc(doc(firestoreDb, 'campaigns', campObj.id), campObj, { merge: true });
-    }
-
-    const existingAdSetIdx = store.adSets.findIndex(as => as.metaAdSetId === '120256675973050309' || as.id === 'adset-120256675973050309');
-    const adSetObj = {
-      id: existingAdSetIdx >= 0 ? store.adSets[existingAdSetIdx].id : 'adset-120256675973050309',
-      campaignId: campObj.id,
-      clientId: client.id,
-      name: 'Phoenix Metro | Homeowners 30-65 | Appraiser Valuation',
-      status: 'PAUSED',
-      dailyBudget: 50,
-      startDate: new Date().toISOString(),
-      targeting: { city: 'Phoenix', state: 'AZ', radiusMiles: 25 },
-      metaAdSetId: '120256675973050309',
-    };
-    if (existingAdSetIdx >= 0) {
-      store.adSets[existingAdSetIdx] = { ...store.adSets[existingAdSetIdx], ...adSetObj, clientId: client.id };
-    } else {
-      store.adSets.unshift(adSetObj);
-    }
-    if (firestoreDb) {
-      await setDoc(doc(firestoreDb, 'adSets', adSetObj.id), adSetObj, { merge: true });
-    }
-
-    const existingAdIdx = store.ads.findIndex(a => a.metaAdId === '120256675974050309' || a.id === 'ad-120256675974050309');
-    const targetAdObj = {
-      id: existingAdIdx >= 0 ? store.ads[existingAdIdx].id : 'ad-120256675974050309',
-      adSetId: adSetObj.id,
-      campaignId: campObj.id,
-      clientId: client.id,
-      name: "eCentury Appraisal Services - Find Your Home's Value Like an Appraiser",
-      status: 'PAUSED',
-      effectiveStatus: 'PAUSED',
-      goalType: 'LEAD_GEN',
-      websiteUrl: 'https://thehomevalueworksheet.com',
-      headline: "Find Your Home's Value Like an Appraiser",
-      primaryText: "Get an unbiased valuation worksheet for your home created by certified appraisers. See what real appraisers look at before making your next move.",
-      description: "Fast, accurate local home valuation worksheet.",
-      callToAction: 'GET_QUOTE',
-      imageUrl: 'https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=1080&q=80',
-      imageFormat: '1:1',
-      dailyBudget: 50,
-      city: client.serviceArea?.city || 'Phoenix',
-      state: client.serviceArea?.state || 'AZ',
-      radiusMiles: client.serviceArea?.radiusMiles || 25,
-      createdAt: new Date().toISOString(),
-      metaCampaignId: '120256675972580309',
-      metaAdSetId: '120256675973050309',
-      metaCreativeId: '120256675974050309_cr',
-      metaAdId: '120256675974050309',
-      pageId: '959992543870563',
-      pageName: 'Ecentury Appraisal Services',
-    };
-    if (existingAdIdx >= 0) {
-      store.ads[existingAdIdx] = { ...store.ads[existingAdIdx], ...targetAdObj, clientId: client.id };
-    } else {
-      store.ads.unshift(targetAdObj);
-      recoveredAds++;
-    }
-    if (firestoreDb) {
-      await setDoc(doc(firestoreDb, 'ads', targetAdObj.id), targetAdObj, { merge: true });
-    }
-  }
-
   persist();
 
   res.json({
@@ -2324,7 +2340,7 @@ app.post('/api/clients/:id/sync-meta', requireAdmin, async (req: Request, res: R
     recoveredAds,
     recoveredCampaigns,
     totalMetaAds: metaAds.length,
-    message: `Recovered ${recoveredAds} ad(s) and ${recoveredCampaigns} campaign(s) for ${client.businessName} (Page: ${clientPageName}). Stored in Cloud Firestore.`,
+    message: `Synced ${recoveredAds} ad(s) and ${recoveredCampaigns} campaign(s) for ${client.businessName} (Page: ${clientPageName}) from Meta API. Stored in Cloud Firestore.`,
   });
 });
 
@@ -2405,9 +2421,9 @@ app.post('/api/clients', requireAdmin, async (req: Request, res: Response) => {
       syncEnabled: clientData.ghlConfig?.syncEnabled !== false,
     },
     serviceArea: {
-      city: clientData.serviceArea?.city || 'Phoenix',
-      state: clientData.serviceArea?.state || 'AZ',
-      radiusMiles: Number(clientData.serviceArea?.radiusMiles) || 20,
+      city: clientData.serviceArea?.city || 'Flint',
+      state: clientData.serviceArea?.state || 'MI',
+      radiusMiles: Number(clientData.serviceArea?.radiusMiles) || 50,
     },
     linkedMeta: clientData.linkedMeta || {},
     ...clientData,
@@ -3964,14 +3980,14 @@ app.post('/api/leads/simulate-lead', requireAdmin, async (req: Request, res: Res
     adName: ad ? ad.name : 'Local Service Lead Ad',
     campaignName: ad ? (store.campaigns.find(c => c.id === ad.campaignId)?.name || 'Campaign') : 'Offer Campaign',
     fullName: fullName || 'Jessica Martinez',
-    phone: phone || client.contactPhone || '(480) 240-8192',
-    email: email || 'jessica.m@example.com',
+    phone: phone || client.contactPhone || '(810) 510-3406',
+    email: email || 'lead.test@gmail.com',
     submittedAt: new Date().toISOString(),
     ghlContactId: `ghl_cnt_${Math.floor(Math.random() * 90000 + 10000)}`,
     ghlSyncStatus: 'synced',
     customAnswers: customAnswers || {
       'Preferred Time': 'Next available appointment',
-      'Notes': 'Found your offer on Instagram'
+      'Notes': 'Found your offer on Facebook'
     },
     alertSent: true,
   };
@@ -3987,7 +4003,7 @@ app.post('/api/leads/simulate-lead', requireAdmin, async (req: Request, res: Res
   res.json({
     success: true,
     lead: newLead,
-    ghlAlert: `Dispatched SMS to ${client?.alertPhone || '(480) 555-0199'} and email to ${client?.alertEmail || 'frontdesk@client.com'}`,
+    ghlAlert: `Dispatched SMS to ${client?.alertPhone || client?.contactPhone || '(810) 510-3406'} and email to ${client?.alertEmail || 'frontdesk@ecentraconcierge.com'}`,
     ghlTag: `FB Ad – ${ad?.name || 'Local Offer'}`,
   });
 });

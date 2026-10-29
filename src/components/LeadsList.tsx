@@ -54,8 +54,8 @@ export const LeadsList: React.FC<LeadsListProps> = ({
         clientId: targetClient.id,
         adId: '',
         fullName: 'Ashley Robinson',
-        phone: targetClient.alertPhone || targetClient.contactPhone || '(480) 250-1234',
-        email: 'ashley.r.az@gmail.com',
+        phone: targetClient.alertPhone || targetClient.contactPhone || '(810) 510-3406',
+        email: 'lead.test@gmail.com',
         customAnswers: {
           'Preferred Appointment Time': 'Tuesday morning 10am',
           'Service Interest': 'First-time introductory session',
@@ -63,7 +63,7 @@ export const LeadsList: React.FC<LeadsListProps> = ({
         }
       });
 
-      setSimulationToast(`New lead arrived! Tagged: "${res.ghlTag}" and sent SMS alert to ${targetClient.alertPhone || targetClient.contactPhone || '(480) 250-1234'}`);
+      setSimulationToast(`New lead arrived! Tagged: "${res.ghlTag}" and sent SMS alert to ${targetClient.alertPhone || targetClient.contactPhone || '(810) 510-3406'}`);
       onRefreshLeads();
     } catch (err: any) {
       alert('Simulation error: ' + err.message);

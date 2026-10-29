@@ -225,12 +225,12 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [selectedNiche, setSelectedNiche] = useState<string>('med_spa');
   const [customNiche, setCustomNiche] = useState<string>('');
   const [websiteUrl, setWebsiteUrl] = useState('');
-  const [city, setCity] = useState('');
-  const [state, setState] = useState('AZ');
-  const [radiusMiles, setRadiusMiles] = useState(15);
-  const [phone, setPhone] = useState('');
+  const [city, setCity] = useState('Flint');
+  const [state, setState] = useState('MI');
+  const [radiusMiles, setRadiusMiles] = useState(50);
+  const [phone, setPhone] = useState('(810) 510-3406');
   const [alertEmail, setAlertEmail] = useState('');
-  const [alertPhone, setAlertPhone] = useState('');
+  const [alertPhone, setAlertPhone] = useState('(810) 510-3406');
   const [ghlLocationId, setGhlLocationId] = useState('');
   const [ghlApiKey, setGhlApiKey] = useState('');
   const [adAccountId, setAdAccountId] = useState('');
@@ -238,9 +238,9 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [pageId, setPageId] = useState('');
   const [pageName, setPageName] = useState('');
   const [instagramUsername, setInstagramUsername] = useState('');
-  const [monthlyBudget, setMonthlyBudget] = useState(2500);
-  const [targetCpl, setTargetCpl] = useState(30.00);
-  const [isOwnBusiness, setIsOwnBusiness] = useState(false);
+  const [monthlyBudget, setMonthlyBudget] = useState(30);
+  const [targetCpl, setTargetCpl] = useState(0);
+  const [isOwnBusiness, setIsOwnBusiness] = useState(true);
   const [notes, setNotes] = useState('');
 
   const openAddModal = () => {
@@ -249,12 +249,12 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setSelectedNiche('med_spa');
     setCustomNiche('');
     setWebsiteUrl('');
-    setCity('');
-    setState('AZ');
-    setRadiusMiles(20);
-    setPhone('');
+    setCity('Flint');
+    setState('MI');
+    setRadiusMiles(50);
+    setPhone('(810) 510-3406');
     setAlertEmail('');
-    setAlertPhone('');
+    setAlertPhone('(810) 510-3406');
     setGhlLocationId('');
     setGhlApiKey('');
     setAdAccountId('');
@@ -264,9 +264,9 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setPageName(defaultPage?.name || 'Ecentury Appraisal Services');
     setIsManualPageInput(false);
     setInstagramUsername('');
-    setMonthlyBudget(2500);
-    setTargetCpl(30.00);
-    setIsOwnBusiness(false);
+    setMonthlyBudget(30);
+    setTargetCpl(0);
+    setIsOwnBusiness(true);
     setNotes('');
     setIsModalOpen(true);
   };
@@ -376,7 +376,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
         clientId: client.id,
         adId: '',
         fullName: 'Test Simulated Lead',
-        phone: client.alertPhone || client.contactPhone || '(480) 250-1234',
+        phone: client.alertPhone || client.contactPhone || '(810) 510-3406',
         email: client.alertEmail || 'lead@example.com',
       });
       setTestLeadFeedback(`Lead created! Dispatched instant SMS to ${client.alertPhone || client.contactPhone} and tagged GHL contact with "${res.ghlTag}".`);
@@ -981,7 +981,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="(480) 250-1234"
+                    placeholder="(810) 510-3406"
                     className="w-full border border-slate-300 rounded-lg p-2"
                   />
                 </div>
@@ -995,7 +995,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
-                    placeholder="Scottsdale"
+                    placeholder="Flint"
                     className="w-full border border-slate-300 rounded-lg p-2 bg-white"
                   />
                 </div>
@@ -1005,7 +1005,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={state}
                     onChange={(e) => setState(e.target.value)}
-                    placeholder="AZ"
+                    placeholder="MI"
                     className="w-full border border-slate-300 rounded-lg p-2 bg-white"
                   />
                 </div>
@@ -1097,7 +1097,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={alertPhone}
                     onChange={(e) => setAlertPhone(e.target.value)}
-                    placeholder="(480) 250-1234"
+                    placeholder="(810) 510-3406"
                     className="w-full border border-slate-300 rounded-lg p-2"
                   />
                 </div>
