@@ -46,7 +46,9 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch status');
     return res.json() as Promise<{
       hasToken: boolean;
-      tokenMasked: string;
+      tokenMasked?: string;
+      isTokenVerified?: boolean;
+      tokenVerificationLabel?: string;
       liveMode: boolean;
       businessManagerId: string;
       businessManagerName: string;
@@ -102,6 +104,14 @@ export const api = {
       adAccounts: MetaAdAccount[];
       pages: MetaPage[];
     }>;
+  },
+
+  async getMetaPages(): Promise<MetaPage[]> {
+    const headers = await getHeaders();
+    const res = await fetch('/api/meta/pages', { headers });
+    if (!res.ok) throw new Error('Failed to fetch Meta pages');
+    const data = await res.json();
+    return data.pages || [];
   },
 
   // Location Search (Meta Targeting Search API)
@@ -169,26 +179,72 @@ export const api = {
     return data;
   },
 
-  async exportClients() {
+  async exportBackup() {
     const headers = await getHeaders();
-    const res = await fetch('/api/clients/export', { headers });
+    const res = await fetch('/api/backup/export', { headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || 'Failed to export clients');
+      throw new Error(err.error || 'Failed to export backup');
     }
-    return res.json() as Promise<{ version: string; exportedAt: string; clientCount: number; clients: Client[] }>;
+    return res.json() as Promise<{
+      version: string;
+      exportedAt: string;
+      clientCount: number;
+      adsCount: number;
+      clients: Client[];
+      ads: any[];
+      campaigns?: any[];
+      adSets?: any[];
+    }>;
+  },
+
+  async exportClients() {
+    return this.exportBackup();
+  },
+
+  async importBackup(payload: { clients?: Partial<Client>[]; ads?: any[]; campaigns?: any[]; adSets?: any[] } | Partial<Client>[]) {
+    const headers = await getHeaders();
+    const res = await fetch('/api/backup/import', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(Array.isArray(payload) ? { clients: payload } : payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to import backup');
+    return data as { 
+      success: boolean; 
+      message: string; 
+      count: number; 
+      clientAdded?: number;
+      clientUpdated?: number;
+      adsAdded?: number;
+      adsUpdated?: number;
+      addedNames?: string[]; 
+      updatedNames?: string[]; 
+      clients: Client[];
+      ads?: any[];
+    };
   },
 
   async importClients(clients: Partial<Client>[]) {
+    return this.importBackup({ clients });
+  },
+
+  async syncClientFromMeta(clientId: string) {
     const headers = await getHeaders();
-    const res = await fetch('/api/clients/import', {
+    const res = await fetch(`/api/clients/${clientId}/sync-meta`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ clients }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Failed to import clients');
-    return data as { success: boolean; message: string; count: number; added: number; updated: number; clients: Client[] };
+    if (!res.ok) throw new Error(data.error || 'Failed to sync from Meta');
+    return data as {
+      success: boolean;
+      recoveredAds: number;
+      recoveredCampaigns: number;
+      totalMetaAds: number;
+      message: string;
+    };
   },
 
   async simulateLead(payload: { 

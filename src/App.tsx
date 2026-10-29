@@ -45,6 +45,8 @@ export default function App() {
   // UI State
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isAdBuilderOpen, setIsAdBuilderOpen] = useState<boolean>(false);
+  const [wizardPrefillAd, setWizardPrefillAd] = useState<any | null>(null);
+  const [savedAds, setSavedAds] = useState<any[]>([]);
   const [selectedAdDetailId, setSelectedAdDetailId] = useState<string | null>(null);
   const [isAdDetailOpen, setIsAdDetailOpen] = useState<boolean>(false);
   const [adDetailToEdit, setAdDetailToEdit] = useState<AdDetailData | null>(null);
@@ -100,17 +102,19 @@ export default function App() {
   const loadAllData = async () => {
     setIsRefreshing(true);
     try {
-      const [statusRes, clientsRes, insightsRes, leadsRes] = await Promise.all([
+      const [statusRes, clientsRes, insightsRes, leadsRes, campaignsRes] = await Promise.all([
         api.getStatus(),
         api.getClients(),
         api.getInsights(selectedClientId, dateRange),
         api.getLeads(selectedClientId),
+        api.getCampaigns(selectedClientId),
       ]);
 
       setLiveMode(statusRes.liveMode);
       setClients(clientsRes);
       setInsights(insightsRes.summary);
       setAdStats(insightsRes.adStats);
+      setSavedAds(campaignsRes?.ads || []);
       setAttentionItems(insightsRes.attentionItems);
       setLeads(leadsRes);
       setIsDbPermanent(Boolean(statusRes.isDbPermanent));
@@ -281,7 +285,10 @@ export default function App() {
         onSelectClient={setSelectedClientId}
         dateRange={dateRange}
         onDateRangeChange={setDateRange}
-        onOpenAdBuilder={() => setIsAdBuilderOpen(true)}
+        onOpenAdBuilder={() => {
+          setWizardPrefillAd(null);
+          setIsAdBuilderOpen(true);
+        }}
         onRefresh={() => {
           showToast('Refreshing stats from Meta Insights API...');
           loadAllData();
@@ -367,8 +374,11 @@ export default function App() {
                   </p>
                 </div>
                 <button
-                  onClick={() => setIsAdBuilderOpen(true)}
-                  className="bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-xs"
+                  onClick={() => {
+                    setWizardPrefillAd(null);
+                    setIsAdBuilderOpen(true);
+                  }}
+                  className="bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold shadow-xs cursor-pointer"
                 >
                   + Create New Ad
                 </button>
@@ -391,11 +401,16 @@ export default function App() {
           {activeTab === 'clients' && (
             <ClientManagement
               clients={clients}
+              savedAds={savedAds}
               onRefreshClients={loadAllData}
               onOpenWeeklyReport={(c) => setWeeklyReportClient(c)}
               onSelectClientForAds={(cId) => {
                 setSelectedClientId(cId);
                 setActiveTab('ads');
+              }}
+              onDuplicateRelaunchAd={(ad) => {
+                setWizardPrefillAd(ad);
+                setIsAdBuilderOpen(true);
               }}
               dbError={storageError}
               isDbPermanent={isDbPermanent}
@@ -428,11 +443,16 @@ export default function App() {
       {isAdBuilderOpen && (
         <AdBuilderWizard
           isOpen={isAdBuilderOpen}
-          onClose={() => setIsAdBuilderOpen(false)}
+          onClose={() => {
+            setIsAdBuilderOpen(false);
+            setWizardPrefillAd(null);
+          }}
           clients={clients}
           initialClientId={selectedClientId !== 'all' ? selectedClientId : undefined}
+          initialAdData={wizardPrefillAd}
           onCampaignCreated={() => {
-            showToast('Campaign staged as PAUSED! Available in Ads Manager.');
+            showToast('Campaign staged as PAUSED! Saved in Cloud Firestore.');
+            setWizardPrefillAd(null);
             loadAllData();
           }}
         />

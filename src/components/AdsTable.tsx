@@ -355,7 +355,7 @@ export const AdsTable: React.FC<AdsTableProps> = ({
 
         {filteredAds.length === 0 && (
           <div className="p-8 text-center text-slate-500 text-xs">
-            No ads found in this view. Click "Create Ad" above to launch a new campaign.
+            No ad results yet. Click "Create Ad" above to launch a new campaign.
           </div>
         )}
       </div>

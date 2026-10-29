@@ -40,7 +40,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
   const [selectedClientId, setSelectedClientId] = useState<string>(
     firstClient?.id || clients[0]?.id || ''
   );
-  const [clientPin, setClientPin] = useState<string>(firstClient?.clientAccessCode || 'LUMINA88');
+  const [clientPin, setClientPin] = useState<string>(firstClient?.clientAccessCode || '');
   const [isCheckingPin, setIsCheckingPin] = useState(false);
 
   if (!isOpen) return null;
@@ -231,7 +231,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
                   type="text"
                   value={clientPin}
                   onChange={(e) => setClientPin(e.target.value)}
-                  placeholder="e.g. LUMINA88"
+                  placeholder="8-character access code"
                   className="w-full text-xs font-mono font-bold tracking-wider uppercase border border-slate-300 rounded-lg p-2.5 bg-slate-50 text-slate-900"
                   required
                 />

@@ -45,11 +45,16 @@ export const LeadsList: React.FC<LeadsListProps> = ({
         ? clients.find(c => c.id === selectedClientId)
         : clients[0];
 
+      if (!targetClient) {
+        setSimulationToast('Please add or select a client before testing leads.');
+        return;
+      }
+
       const res = await api.simulateLead({
-        clientId: targetClient?.id || 'client-1',
-        adId: 'ad-1',
+        clientId: targetClient.id,
+        adId: '',
         fullName: 'Ashley Robinson',
-        phone: '(480) 555-0194',
+        phone: targetClient.alertPhone || targetClient.contactPhone || '(480) 250-1234',
         email: 'ashley.r.az@gmail.com',
         customAnswers: {
           'Preferred Appointment Time': 'Tuesday morning 10am',
@@ -58,7 +63,7 @@ export const LeadsList: React.FC<LeadsListProps> = ({
         }
       });
 
-      setSimulationToast(`New lead arrived! Tagged: "${res.ghlTag}" and sent SMS alert to ${targetClient?.alertPhone || '(480) 555-0199'}`);
+      setSimulationToast(`New lead arrived! Tagged: "${res.ghlTag}" and sent SMS alert to ${targetClient.alertPhone || targetClient.contactPhone || '(480) 250-1234'}`);
       onRefreshLeads();
     } catch (err: any) {
       alert('Simulation error: ' + err.message);

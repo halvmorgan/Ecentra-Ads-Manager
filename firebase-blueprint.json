@@ -62,9 +62,27 @@
         "phone": { "type": "string", "maxLength": 30 }
       },
       "required": ["clientId", "fullName"]
+    },
+    "ServerSecrets": {
+      "title": "Server Secrets",
+      "description": "Server-only encrypted credentials for Meta System User and GoHighLevel integration",
+      "type": "object",
+      "properties": {
+        "updatedAt": { "type": "string" },
+        "metaTokenVerifiedAt": { "type": "string" },
+        "metaTokenVerifiedLabel": { "type": "string" },
+        "isVerified": { "type": "boolean" },
+        "liveMode": { "type": "boolean" },
+        "businessManagerId": { "type": "string" },
+        "businessManagerName": { "type": "string" }
+      }
     }
   },
   "firestore": {
+    "/server_secrets/{secretId}": {
+      "schema": "ServerSecrets",
+      "description": "Server-only secrets storage inaccessible to client browser"
+    },
     "/system/{configId}": {
       "schema": "SystemConfig",
       "description": "System configuration documents"

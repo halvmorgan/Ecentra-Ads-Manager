@@ -163,47 +163,53 @@ export const ClientPortalView: React.FC<ClientPortalViewProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {ads.map((ad) => (
-              <div
-                key={ad.adId}
-                className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50/50 flex flex-col justify-between"
-              >
-                <div>
-                  <div className="aspect-video w-full bg-slate-200 relative overflow-hidden">
-                    <img
-                      src={ad.imageUrl}
-                      alt={ad.adName}
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute top-2 left-2 bg-slate-900/80 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded">
-                      {ad.status === 'ACTIVE' ? 'Active in Feed' : 'Scheduled'}
-                    </div>
-                  </div>
-
-                  <div className="p-4">
-                    <h4 className="font-bold text-slate-900 text-sm leading-snug line-clamp-1">
-                      {ad.headline}
-                    </h4>
-                    <div className="text-xs text-slate-600 line-clamp-2 mt-1">
-                      {ad.adName}
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-200 text-xs">
-                      <div>
-                        <span className="text-[10px] text-slate-500 uppercase block">New Leads</span>
-                        <span className="font-bold text-slate-900 text-sm">{ad.leads}</span>
+          {ads.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
+              No ad results yet. Active campaigns will appear here once launched.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {ads.map((ad) => (
+                <div
+                  key={ad.adId}
+                  className="rounded-xl border border-slate-200 overflow-hidden bg-slate-50/50 flex flex-col justify-between"
+                >
+                  <div>
+                    <div className="aspect-video w-full bg-slate-200 relative overflow-hidden">
+                      <img
+                        src={ad.imageUrl}
+                        alt={ad.adName}
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute top-2 left-2 bg-slate-900/80 backdrop-blur-xs text-white text-[10px] font-bold px-2 py-0.5 rounded">
+                        {ad.status === 'ACTIVE' ? 'Active in Feed' : 'Scheduled'}
                       </div>
-                      <div>
-                        <span className="text-[10px] text-slate-500 uppercase block">Cost Per Lead</span>
-                        <span className="font-bold text-emerald-700 text-sm">${ad.cpl.toFixed(2)}</span>
+                    </div>
+
+                    <div className="p-4">
+                      <h4 className="font-bold text-slate-900 text-sm leading-snug line-clamp-1">
+                        {ad.headline}
+                      </h4>
+                      <div className="text-xs text-slate-600 line-clamp-2 mt-1">
+                        {ad.adName}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-slate-200 text-xs">
+                        <div>
+                          <span className="text-[10px] text-slate-500 uppercase block">New Leads</span>
+                          <span className="font-bold text-slate-900 text-sm">{ad.leads}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-500 uppercase block">Cost Per Lead</span>
+                          <span className="font-bold text-emerald-700 text-sm">${ad.cpl.toFixed(2)}</span>
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Verified Leads Received */}
@@ -223,36 +229,42 @@ export const ClientPortalView: React.FC<ClientPortalViewProps> = ({
             </div>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-600">
-              <thead className="bg-slate-50 text-slate-500 font-semibold uppercase text-[11px] border-b border-slate-200">
-                <tr>
-                  <th className="py-2.5 px-3">Customer Name</th>
-                  <th className="py-2.5 px-3">Phone</th>
-                  <th className="py-2.5 px-3">Email</th>
-                  <th className="py-2.5 px-3">Date & Time</th>
-                  <th className="py-2.5 px-3">Source</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {leads.map((lead) => (
-                  <tr key={lead.id} className="hover:bg-slate-50/70">
-                    <td className="py-3 px-3 font-bold text-slate-900">{lead.fullName}</td>
-                    <td className="py-3 px-3 font-semibold text-slate-800">{lead.phone}</td>
-                    <td className="py-3 px-3 text-slate-600">{lead.email}</td>
-                    <td className="py-3 px-3 text-slate-500">
-                      {new Date(lead.submittedAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                    </td>
-                    <td className="py-3 px-3">
-                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium">
-                        Instagram & Facebook Ad
-                      </span>
-                    </td>
+          {leads.length === 0 ? (
+            <div className="p-8 text-center text-slate-500 text-xs bg-slate-50 rounded-xl border border-slate-200">
+              No customer inquiries yet. New verified leads will appear here automatically.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead className="bg-slate-50 text-slate-500 font-semibold uppercase text-[11px] border-b border-slate-200">
+                  <tr>
+                    <th className="py-2.5 px-3">Customer Name</th>
+                    <th className="py-2.5 px-3">Phone</th>
+                    <th className="py-2.5 px-3">Email</th>
+                    <th className="py-2.5 px-3">Date & Time</th>
+                    <th className="py-2.5 px-3">Source</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {leads.map((lead) => (
+                    <tr key={lead.id} className="hover:bg-slate-50/70">
+                      <td className="py-3 px-3 font-bold text-slate-900">{lead.fullName}</td>
+                      <td className="py-3 px-3 font-semibold text-slate-800">{lead.phone}</td>
+                      <td className="py-3 px-3 text-slate-600">{lead.email}</td>
+                      <td className="py-3 px-3 text-slate-500">
+                        {new Date(lead.submittedAt).toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="py-3 px-3">
+                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium">
+                          Instagram & Facebook Ad
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Concierge Support Card */}

@@ -10,7 +10,15 @@ export const ChartsSection: React.FC<ChartsSectionProps> = ({ dailyData }) => {
   const [metricView, setMetricView] = useState<'both' | 'spend' | 'leads'>('both');
 
   if (!dailyData || dailyData.length === 0) {
-    return null;
+    return (
+      <div className="bg-white rounded-xl p-8 border border-slate-200 shadow-xs mb-6 text-center">
+        <TrendingUp className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+        <h3 className="font-semibold text-slate-700 text-sm">No ad results yet</h3>
+        <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+          Daily performance trajectory will appear here once live Meta campaigns deliver impressions and leads.
+        </p>
+      </div>
+    );
   }
 
   const maxSpend = Math.max(...dailyData.map((d) => d.spend), 10);

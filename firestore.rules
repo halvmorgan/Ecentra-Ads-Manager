@@ -2,7 +2,55 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // 1. Server-only secrets: stores Meta System User token and GoHighLevel API keys permanently.
+    // Client browsers cannot list, query, or read this document.
+    match /server_secrets/{secretDocId} {
+      allow list: if false;
+      allow read, write: if request.auth == null && secretDocId == 'app_credentials_v1';
+    }
+
+    // 2. Default deny catch-all for any undefined paths
     match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. System collection & diagnostics
+    match /system/connection_test {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /system/health_check {
+      allow read, write: if true;
+    }
+
+    match /system/{configId} {
+      allow read, write: if true;
+    }
+
+    // 4. Client records (sanitized profiles and targeting, no secret tokens)
+    match /clients/{clientId} {
+      allow read, write: if true;
+    }
+
+    // 5. Campaigns, AdSets, Ads, Leads, Sessions
+    match /campaigns/{campaignId} {
+      allow read, write: if true;
+    }
+
+    match /adSets/{adSetId} {
+      allow read, write: if true;
+    }
+
+    match /ads/{adId} {
+      allow read, write: if true;
+    }
+
+    match /leads/{leadId} {
+      allow read, write: if true;
+    }
+
+    match /client_sessions/{sessionId} {
       allow read, write: if true;
     }
   }

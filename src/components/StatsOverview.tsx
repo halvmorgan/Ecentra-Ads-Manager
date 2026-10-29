@@ -25,9 +25,19 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
   const budgetPercentUsed = insights.monthlyBudget > 0 
     ? Math.min(100, Math.round((insights.totalSpentToDate / insights.monthlyBudget) * 100)) 
     : 0;
+  const hasNoResults = insights.totalSpentToDate === 0 && insights.leads === 0 && insights.clicks === 0;
 
   return (
     <div className="space-y-4 mb-6">
+      {hasNoResults && (
+        <div className="bg-slate-100/80 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between text-xs text-slate-600">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-slate-400"></span>
+            <span className="font-semibold text-slate-800">No ad results yet.</span>
+            <span>Live metrics will automatically populate directly from the Meta Marketing API once campaigns deliver impressions.</span>
+          </div>
+        </div>
+      )}
       {/* Top 4 Hero Metrics Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* CARD 1: COST PER LEAD */}
@@ -51,7 +61,9 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
 
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
             <div className="flex items-center gap-1 font-medium">
-              {isCplGood ? (
+              {insights.costPerLead === 0 ? (
+                <span className="text-slate-400">No ad results yet</span>
+              ) : isCplGood ? (
                 <span className="text-emerald-600 flex items-center">
                   <TrendingDown className="w-3.5 h-3.5 mr-0.5" />
                   Within target budget
@@ -86,7 +98,7 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
           </div>
 
           <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
-            <span>Avg {((insights.leads / 11) || 0).toFixed(1)} leads / day</span>
+            <span>{insights.leads > 0 ? `Avg ${((insights.leads / 11) || 0).toFixed(1)} leads / day` : 'No lead results yet'}</span>
             <span className="text-slate-400 text-[11px]">Instant Forms</span>
           </div>
         </div>

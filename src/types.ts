@@ -29,6 +29,7 @@ export interface Client {
     longitude?: number;
   };
   phone: string;
+  contactPhone?: string;
   ghlConfig: {
     locationId: string;
     apiKeyMasked?: string;
@@ -215,13 +216,15 @@ export interface InsightsData {
 }
 
 export interface MetaConnectionState {
-  tokenMasked: string;
+  tokenMasked?: string;
   hasToken: boolean;
   isValid: boolean;
   liveMode: boolean; // false = Demo Mode
   connectedAt?: string;
   businessManagerId?: string;
   businessManagerName?: string;
+  isTokenVerified?: boolean;
+  tokenVerificationLabel?: string;
 }
 
 export interface MetaAdAccount {

@@ -28,15 +28,29 @@ import {
   Target,
   Users
 } from 'lucide-react';
-import { Client, GeneratedAdCopy, AdGoalType, SpecialAdCategory, GeoLocationSearchResult } from '../types';
+import { Client, GeneratedAdCopy, AdGoalType, SpecialAdCategory, GeoLocationSearchResult, MetaPage } from '../types';
 import { api } from '../services/api';
 import { getNicheLabel, getNicheAudienceRecommendation } from '../utils/niche';
+
+const DEFAULT_PORTFOLIO_PAGES: MetaPage[] = [
+  {
+    id: '959992543870563',
+    name: 'Ecentury Appraisal Services',
+    pictureUrl: 'https://graph.facebook.com/v21.0/959992543870563/picture?type=large',
+  },
+  {
+    id: '1343054112229117',
+    name: 'Ecentra Concierge',
+    pictureUrl: 'https://graph.facebook.com/v21.0/1343054112229117/picture?type=large',
+  },
+];
 
 interface AdBuilderWizardProps {
   isOpen: boolean;
   onClose: () => void;
   clients: Client[];
   initialClientId?: string;
+  initialAdData?: any;
   onCampaignCreated: () => void;
 }
 
@@ -45,48 +59,49 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   onClose,
   clients,
   initialClientId,
+  initialAdData,
   onCampaignCreated,
 }) => {
   // Wizard Step (1 to 6)
   const [currentStep, setCurrentStep] = useState<number>(1);
 
   // Step 1: Client, Offer & Goal
-  const [selectedClientId, setSelectedClientId] = useState<string>(initialClientId || clients[0]?.id || '');
-  const [goalType, setGoalType] = useState<AdGoalType>('LEAD_GEN');
-  const [specialCategory, setSpecialCategory] = useState<SpecialAdCategory>('NONE');
-  const [websiteUrl, setWebsiteUrl] = useState<string>('');
-  const [offerText, setOfferText] = useState<string>('$99 First Glow Facial + Skin Consultation (New Clients Only)');
+  const [selectedClientId, setSelectedClientId] = useState<string>(initialAdData?.clientId || initialClientId || clients[0]?.id || '');
+  const [goalType, setGoalType] = useState<AdGoalType>(initialAdData?.goalType || 'LEAD_GEN');
+  const [specialCategory, setSpecialCategory] = useState<SpecialAdCategory>(initialAdData?.specialCategory || 'NONE');
+  const [websiteUrl, setWebsiteUrl] = useState<string>(initialAdData?.websiteUrl || '');
+  const [offerText, setOfferText] = useState<string>(initialAdData?.headline || initialAdData?.offerTitle || '$99 First Glow Facial + Skin Consultation (New Clients Only)');
 
   // Step 2: Ad Copy
   const [copies, setCopies] = useState<GeneratedAdCopy[]>([]);
   const [selectedCopyIndex, setSelectedCopyIndex] = useState<number>(0);
   const [isGeneratingCopy, setIsGeneratingCopy] = useState<boolean>(false);
   const [variationCycle, setVariationCycle] = useState<number>(1);
-  const [primaryText, setPrimaryText] = useState<string>('');
-  const [headline, setHeadline] = useState<string>('');
-  const [description, setDescription] = useState<string>('');
-  const [callToAction, setCallToAction] = useState<string>('BOOK_NOW');
+  const [primaryText, setPrimaryText] = useState<string>(initialAdData?.primaryText || '');
+  const [headline, setHeadline] = useState<string>(initialAdData?.headline || '');
+  const [description, setDescription] = useState<string>(initialAdData?.description || '');
+  const [callToAction, setCallToAction] = useState<string>(initialAdData?.callToAction || 'BOOK_NOW');
 
   // Step 3: Image Creative
   const [imageSourceMode, setImageSourceMode] = useState<'generate' | 'site'>('generate');
-  const [imageFormat, setImageFormat] = useState<'1:1' | '9:16'>('1:1');
+  const [imageFormat, setImageFormat] = useState<'1:1' | '9:16'>(initialAdData?.imageFormat || '1:1');
   const [imagePrompt, setImagePrompt] = useState<string>('Warm, professional treatment room with soft lighting, aesthetician prepping gentle botanical facial');
   const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false);
-  const [selectedImageUrl, setSelectedImageUrl] = useState<string>('https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80');
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string>(initialAdData?.imageUrl || 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80');
   
   // 3b: Scrape from site
-  const [scrapeUrl, setScrapeUrl] = useState<string>('');
+  const [scrapeUrl, setScrapeUrl] = useState<string>(initialAdData?.websiteUrl || '');
   const [scrapedImages, setScrapedImages] = useState<string[]>([]);
   const [isScraping, setIsScraping] = useState<boolean>(false);
 
   // Step 4: Audience & Budget
-  const [city, setCity] = useState<string>('');
-  const [radiusMiles, setRadiusMiles] = useState<number>(15);
-  const [minAge, setMinAge] = useState<number>(25);
-  const [maxAge, setMaxAge] = useState<number>(65);
+  const [city, setCity] = useState<string>(initialAdData?.city || '');
+  const [radiusMiles, setRadiusMiles] = useState<number>(initialAdData?.radiusMiles || 15);
+  const [minAge, setMinAge] = useState<number>(initialAdData?.minAge || 25);
+  const [maxAge, setMaxAge] = useState<number>(initialAdData?.maxAge || 65);
   const [genders, setGenders] = useState<'ALL' | 'MEN' | 'WOMEN'>('ALL');
-  const [dailyBudget, setDailyBudget] = useState<number>(50);
-  const [placements, setPlacements] = useState<string[]>(['facebook_feed', 'instagram_feed', 'stories_reels']);
+  const [dailyBudget, setDailyBudget] = useState<number>(initialAdData?.dailyBudget || 50);
+  const [placements, setPlacements] = useState<string[]>(initialAdData?.placements || ['facebook_feed', 'instagram_feed', 'stories_reels']);
 
   // Location search (Meta Targeting Search API)
   const [locationSearchInput, setLocationSearchInput] = useState<string>('');
@@ -98,8 +113,8 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   const [formQuestions, setFormQuestions] = useState<string[]>(['Full Name', 'Phone Number', 'Email']);
   const [customQuestion1, setCustomQuestion1] = useState<string>('Preferred day of week (e.g., Saturday morning)');
   const [customQuestion2, setCustomQuestion2] = useState<string>('What is your primary goal / concern?');
-  const [privacyPolicyUrl, setPrivacyPolicyUrl] = useState<string>('');
-  const [thankYouPhone, setThankYouPhone] = useState<string>('');
+  const [privacyPolicyUrl, setPrivacyPolicyUrl] = useState<string>(initialAdData?.privacyPolicyUrl || '');
+  const [thankYouPhone, setThankYouPhone] = useState<string>(initialAdData?.thankYouPhone || '');
   const [thankYouMessage, setThankYouMessage] = useState<string>('Thank you! Our local concierge team will text or call you within 15 minutes to confirm your appointment.');
 
   // Step 6: Review & Launch State
@@ -114,12 +129,88 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   const [goLiveSuccessResponse, setGoLiveSuccessResponse] = useState<any | null>(null);
   const [launchSuccessData, setLaunchSuccessData] = useState<any | null>(null);
 
+  // Meta Facebook Pages for portfolio
+  const [metaPages, setMetaPages] = useState<MetaPage[]>(DEFAULT_PORTFOLIO_PAGES);
+  const [selectedPageId, setSelectedPageId] = useState<string>(
+    initialAdData?.pageId || '959992543870563'
+  );
+  const [selectedPageName, setSelectedPageName] = useState<string>(
+    initialAdData?.pageName || ''
+  );
+
   // Active Client
   const activeClient = clients.find((c) => c.id === selectedClientId) || clients[0];
 
-  // Initialize defaults when active client changes
+  // Fetch Meta Pages from server-stored token and portfolio 2393048237813409
   useEffect(() => {
-    if (activeClient) {
+    api.getMetaPages()
+      .then((pages) => {
+        if (pages && pages.length > 0) {
+          setMetaPages(pages);
+        }
+      })
+      .catch(() => {
+        // Fallback to DEFAULT_PORTFOLIO_PAGES
+      });
+  }, []);
+
+  // Sync selected Facebook Page when active client or initialAdData changes
+  useEffect(() => {
+    if (initialAdData?.pageId) {
+      setSelectedPageId(initialAdData.pageId);
+      setSelectedPageName(initialAdData.pageName || '');
+    } else if (activeClient?.linkedMeta?.pageId) {
+      setSelectedPageId(activeClient.linkedMeta.pageId);
+      setSelectedPageName(activeClient.linkedMeta.pageName || '');
+    } else {
+      setSelectedPageId(metaPages[0]?.id || '959992543870563');
+      setSelectedPageName(metaPages[0]?.name || 'Ecentury Appraisal Services');
+    }
+  }, [activeClient, initialAdData, metaPages]);
+
+  // Resolve active Facebook Page, name and profile picture
+  const activePage = metaPages.find((p) => p.id === selectedPageId) || {
+    id: selectedPageId || '959992543870563',
+    name: selectedPageName || (selectedPageId === '959992543870563' ? 'Ecentury Appraisal Services' : selectedPageId === '1343054112229117' ? 'Ecentra Concierge' : (activeClient?.linkedMeta?.pageName || activeClient?.businessName || 'Facebook Page')),
+    pictureUrl: `https://graph.facebook.com/v21.0/${selectedPageId || '959992543870563'}/picture?type=large`,
+  };
+  const activePageName = activePage.name;
+  const activePagePicture = activePage.pictureUrl;
+
+  // Prefill on initialAdData changes when modal opens
+  useEffect(() => {
+    if (isOpen && initialAdData) {
+      if (initialAdData.clientId) setSelectedClientId(initialAdData.clientId);
+      if (initialAdData.goalType) setGoalType(initialAdData.goalType);
+      if (initialAdData.specialCategory) setSpecialCategory(initialAdData.specialCategory);
+      if (initialAdData.websiteUrl) {
+        setWebsiteUrl(initialAdData.websiteUrl);
+        setScrapeUrl(initialAdData.websiteUrl);
+      }
+      if (initialAdData.headline || initialAdData.offerTitle) setOfferText(initialAdData.headline || initialAdData.offerTitle);
+      if (initialAdData.primaryText) setPrimaryText(initialAdData.primaryText);
+      if (initialAdData.headline) setHeadline(initialAdData.headline);
+      if (initialAdData.description) setDescription(initialAdData.description);
+      if (initialAdData.callToAction) setCallToAction(initialAdData.callToAction);
+      if (initialAdData.imageUrl) setSelectedImageUrl(initialAdData.imageUrl);
+      if (initialAdData.imageFormat) setImageFormat(initialAdData.imageFormat);
+      if (initialAdData.city) setCity(initialAdData.city);
+      if (initialAdData.radiusMiles) setRadiusMiles(initialAdData.radiusMiles);
+      if (initialAdData.minAge) setMinAge(initialAdData.minAge);
+      if (initialAdData.maxAge) setMaxAge(initialAdData.maxAge);
+      if (initialAdData.dailyBudget) setDailyBudget(initialAdData.dailyBudget);
+      if (initialAdData.placements) setPlacements(initialAdData.placements);
+      if (initialAdData.privacyPolicyUrl) setPrivacyPolicyUrl(initialAdData.privacyPolicyUrl);
+      if (initialAdData.thankYouPhone) setThankYouPhone(initialAdData.thankYouPhone);
+      if (initialAdData.pageId) setSelectedPageId(initialAdData.pageId);
+      if (initialAdData.pageName) setSelectedPageName(initialAdData.pageName);
+      setCurrentStep(1);
+    }
+  }, [isOpen, initialAdData]);
+
+  // Initialize defaults when active client changes (only if not prefilling an ad)
+  useEffect(() => {
+    if (activeClient && !initialAdData) {
       setCity(activeClient.serviceArea.city);
       setRadiusMiles(activeClient.serviceArea.radiusMiles);
       setScrapeUrl(activeClient.websiteUrl);
@@ -350,6 +441,8 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       // Requirement 4: Use exactly the text typed or edited in Step 2
       const payload = {
         clientId: activeClient.id,
+        pageId: selectedPageId,
+        pageName: activePageName,
         offerTitle: offerText,
         primaryText,
         headline,
@@ -492,6 +585,14 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
           {/* STEP 1: CLIENT & OFFER */}
           {currentStep === 1 && (
             <div className="space-y-5">
+              {initialAdData && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold uppercase tracking-wider text-[10px] bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded">Duplicate / Relaunch</span>
+                    <span>All fields pre-filled from saved ad: <strong>{initialAdData.headline || initialAdData.name}</strong>. Review and make any adjustments before launching.</span>
+                  </div>
+                </div>
+              )}
               <div>
                 <h3 className="text-base font-bold text-slate-900">
                   Step 1: Select Client & Core Offer
@@ -549,6 +650,47 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* AD POSTS AS (FACEBOOK PAGE) SELECTOR */}
+                <div className="bg-slate-50 p-3.5 rounded-lg border border-slate-200 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-xs font-bold text-slate-800 uppercase">
+                      Ad posts as: <span className="text-blue-700 normal-case font-bold">{activePageName}</span>
+                    </label>
+                    <span className="text-[11px] text-slate-500 font-medium">Facebook Page for this ad</span>
+                  </div>
+
+                  <div className="flex items-center gap-2.5 bg-white p-2 rounded-lg border border-slate-300">
+                    {activePagePicture ? (
+                      <img
+                        src={activePagePicture}
+                        alt={activePageName}
+                        className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0"
+                        onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                      />
+                    ) : (
+                      <div className="w-7 h-7 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                        f
+                      </div>
+                    )}
+                    <select
+                      value={selectedPageId}
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        setSelectedPageId(id);
+                        const p = metaPages.find(item => item.id === id);
+                        if (p) setSelectedPageName(p.name);
+                      }}
+                      className="flex-1 text-xs bg-transparent border-none p-0 font-semibold text-slate-900 focus:ring-0 cursor-pointer"
+                    >
+                      {metaPages.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} ({p.id})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
 
                 {/* AD GOAL SELECTION */}
                 <div className="border border-slate-200 rounded-xl p-3.5 bg-white">
@@ -1467,12 +1609,21 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                       {/* Header of Ad Post */}
                       <div className="p-3 flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <div className="w-8 h-8 rounded-full bg-slate-900 text-amber-400 flex items-center justify-center font-bold text-xs">
-                            {activeClient?.businessName.charAt(0) || 'E'}
-                          </div>
+                          {activePagePicture ? (
+                            <img
+                              src={activePagePicture}
+                              alt={activePageName}
+                              className="w-8 h-8 rounded-full object-cover border border-slate-200 shrink-0"
+                              onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-xs shrink-0">
+                              f
+                            </div>
+                          )}
                           <div>
                             <div className="font-bold text-xs text-slate-900 leading-tight">
-                              {activeClient?.businessName || 'Local Business'}
+                              {activePageName}
                             </div>
                             <div className="text-[10px] text-slate-500 flex items-center gap-1">
                               <span>Sponsored</span>

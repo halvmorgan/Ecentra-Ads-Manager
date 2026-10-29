@@ -31,10 +31,11 @@ export const MetaSettings: React.FC<MetaSettingsProps> = ({
   onRefreshAll,
 }) => {
   const [systemUserToken, setSystemUserToken] = useState('');
-  const [tokenMasked, setTokenMasked] = useState('EAAG...••••••••9f2A');
   const [hasToken, setHasToken] = useState(false);
-  const [businessManagerName, setBusinessManagerName] = useState('Ecentra Concierge (Agency BM)');
-  const [businessManagerId, setBusinessManagerId] = useState('bm_2091848109');
+  const [isTokenVerified, setIsTokenVerified] = useState(false);
+  const [tokenVerificationLabel, setTokenVerificationLabel] = useState('');
+  const [businessManagerName, setBusinessManagerName] = useState('');
+  const [businessManagerId, setBusinessManagerId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -55,9 +56,14 @@ export const MetaSettings: React.FC<MetaSettingsProps> = ({
     try {
       const status = await api.getStatus();
       setHasToken(status.hasToken);
-      setTokenMasked(status.tokenMasked || (liveMode ? 'EAAG...••••••••Live' : 'EAAG...••••••••Demo'));
-      setBusinessManagerName(status.businessManagerName || 'Ecentra Concierge (Agency BM)');
-      setBusinessManagerId(status.businessManagerId || 'bm_2091848109');
+      setIsTokenVerified(Boolean(status.isTokenVerified ?? status.hasToken));
+      const formattedDate = new Date(status.connectedAt || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      setTokenVerificationLabel(
+        status.tokenVerificationLabel || 
+        (status.hasToken ? `Token saved - verified ${formattedDate}` : 'No token saved')
+      );
+      setBusinessManagerName(status.businessManagerName || 'Connected Business Manager');
+      setBusinessManagerId(status.businessManagerId || 'Configured via Token');
     } catch (err) {
       console.error(err);
     }
@@ -223,8 +229,18 @@ export const MetaSettings: React.FC<MetaSettingsProps> = ({
             <span className="font-mono text-slate-700">{businessManagerId}</span>
           </div>
           <div>
-            <span className="text-slate-500 text-[11px] block">Current Stored Token:</span>
-            <span className="font-mono text-slate-700">{tokenMasked}</span>
+            <span className="text-slate-500 text-[11px] block">Token Status:</span>
+            {hasToken ? (
+              <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                <span>{tokenVerificationLabel}</span>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1.5 text-slate-500 font-medium">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                <span>No token saved</span>
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -256,20 +272,26 @@ export const MetaSettings: React.FC<MetaSettingsProps> = ({
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wide block">
             Shared Ad Accounts (Client pays Meta with own card)
           </span>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {adAccounts.map((acc) => (
-              <div key={acc.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-slate-900 truncate">{acc.name}</span>
-                  <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded">
-                    Active
-                  </span>
+          {adAccounts.length === 0 ? (
+            <div className="p-4 text-center text-slate-400 text-xs bg-slate-50 rounded-lg border border-slate-100">
+              No ad accounts discovered yet. Save a verified Meta System User token to discover accounts.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {adAccounts.map((acc) => (
+                <div key={acc.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-slate-900 truncate">{acc.name}</span>
+                    <span className="text-[10px] font-semibold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded">
+                      Active
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 font-mono">ID: {acc.id}</div>
+                  <div className="text-[11px] text-slate-500">Currency: {acc.currency} (USD)</div>
                 </div>
-                <div className="text-[11px] text-slate-500 font-mono">ID: {acc.id}</div>
-                <div className="text-[11px] text-slate-500">Currency: {acc.currency} (USD)</div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Facebook Pages & Instagram Accounts Grid */}
@@ -277,25 +299,31 @@ export const MetaSettings: React.FC<MetaSettingsProps> = ({
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wide block">
             Partner Facebook Pages & Instagram Accounts
           </span>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {pages.map((p) => (
-              <div key={p.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <Facebook className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  <span className="font-bold text-slate-900 truncate">{p.name}</span>
-                </div>
-                {p.instagramAccount && (
-                  <div className="flex items-center gap-2 text-pink-600">
-                    <Instagram className="w-3.5 h-3.5 shrink-0" />
-                    <span className="font-semibold text-slate-800 truncate">
-                      {p.instagramAccount.username}
-                    </span>
+          {pages.length === 0 ? (
+            <div className="p-4 text-center text-slate-400 text-xs bg-slate-50 rounded-lg border border-slate-100">
+              No Facebook Pages discovered yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pages.map((p) => (
+                <div key={p.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Facebook className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                    <span className="font-bold text-slate-900 truncate">{p.name}</span>
                   </div>
-                )}
-                <div className="text-[10px] text-slate-400 font-mono">Page ID: {p.id}</div>
-              </div>
-            ))}
-          </div>
+                  {p.instagramAccount && (
+                    <div className="flex items-center gap-2 text-pink-600">
+                      <Instagram className="w-3.5 h-3.5 shrink-0" />
+                      <span className="font-semibold text-slate-800 truncate">
+                        {p.instagramAccount.username}
+                      </span>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-slate-400 font-mono">Page ID: {p.id}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 

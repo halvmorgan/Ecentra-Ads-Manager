@@ -193,7 +193,7 @@ export const Navbar: React.FC<NavbarProps> = ({
               <div>
                 <div className="flex items-center gap-1.5">
                   <span className="font-bold text-slate-900 tracking-tight text-base sm:text-lg">
-                    ECENTRA
+                    ECENTRA CONCIERGE
                   </span>
                   <span className="text-amber-600 font-semibold text-xs uppercase tracking-widest bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
                     Ads

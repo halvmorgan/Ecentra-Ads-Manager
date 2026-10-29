@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Building2, 
   Plus, 
@@ -24,26 +24,46 @@ import {
   RotateCcw,
   Check,
   Download,
-  Upload
+  Upload,
+  RefreshCw,
+  CopyPlus,
+  Image as ImageIcon
 } from 'lucide-react';
-import { Client, NicheType } from '../types';
+import { Client, NicheType, MetaPage } from '../types';
 import { api } from '../services/api';
 import { getNicheLabel, STANDARD_NICHES } from '../utils/niche';
 
+const DEFAULT_PORTFOLIO_PAGES: MetaPage[] = [
+  {
+    id: '959992543870563',
+    name: 'Ecentury Appraisal Services',
+    pictureUrl: 'https://graph.facebook.com/v21.0/959992543870563/picture?type=large',
+  },
+  {
+    id: '1343054112229117',
+    name: 'Ecentra Concierge',
+    pictureUrl: 'https://graph.facebook.com/v21.0/1343054112229117/picture?type=large',
+  },
+];
+
 interface ClientManagementProps {
   clients: Client[];
+  savedAds?: any[];
   onRefreshClients: () => void;
   onOpenWeeklyReport: (client: Client) => void;
   onSelectClientForAds: (clientId: string) => void;
+  onDuplicateRelaunchAd?: (ad: any) => void;
   dbError?: string | null;
   isDbPermanent?: boolean;
 }
 
 export const ClientManagement: React.FC<ClientManagementProps> = ({
   clients,
+  savedAds = [],
   onRefreshClients,
   onOpenWeeklyReport,
   onSelectClientForAds,
+  onDuplicateRelaunchAd,
   dbError,
   isDbPermanent,
 }) => {
@@ -54,37 +74,52 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
   const [isTestingLead, setIsTestingLead] = useState(false);
   const [copiedClientId, setCopiedClientId] = useState<string | null>(null);
   const [resettingClientId, setResettingClientId] = useState<string | null>(null);
+  const [syncingClientId, setSyncingClientId] = useState<string | null>(null);
+  const [metaPages, setMetaPages] = useState<MetaPage[]>(DEFAULT_PORTFOLIO_PAGES);
+  const [isManualPageInput, setIsManualPageInput] = useState(false);
 
-  // Export / Import State
+  useEffect(() => {
+    api.getMetaPages()
+      .then((pages) => {
+        if (pages && pages.length > 0) {
+          setMetaPages(pages);
+        }
+      })
+      .catch(() => {
+        // Fallback to portfolio pages
+      });
+  }, []);
+
+  // Export / Import Backup State (Clients & Saved Ads)
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [backupNotice, setBackupNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  const handleExportClients = async () => {
+  const handleExportBackup = async () => {
     setIsExporting(true);
     setBackupNotice(null);
     try {
-      const data = await api.exportClients();
-      const jsonStr = JSON.stringify(data.clients, null, 2);
+      const data = await api.exportBackup();
+      const jsonStr = JSON.stringify(data, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `ecentra_clients_backup_${new Date().toISOString().slice(0, 10)}.json`;
+      link.download = `ecentra_backup_${new Date().toISOString().slice(0, 10)}.json`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
       setBackupNotice({
         type: 'success',
-        text: `Exported ${data.clients.length} client account(s) to JSON backup file successfully.`,
+        text: `Exported full backup with ${data.clients?.length || 0} client(s) and ${data.ads?.length || 0} saved ad(s) to JSON. (Tokens & keys excluded).`,
       });
       setTimeout(() => setBackupNotice(null), 5000);
     } catch (err: any) {
       setBackupNotice({
         type: 'error',
-        text: 'Export failed: ' + (err.message || 'Unknown error'),
+        text: 'Backup export failed: ' + (err.message || 'Unknown error'),
       });
     } finally {
       setIsExporting(false);
@@ -102,22 +137,25 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
       try {
         const text = e.target?.result as string;
         const parsed = JSON.parse(text);
-        const clientsToImport = Array.isArray(parsed) ? parsed : parsed.clients;
-        if (!Array.isArray(clientsToImport) || clientsToImport.length === 0) {
-          throw new Error('No valid client array found in JSON file.');
+        const res = await api.importBackup(parsed);
+        const details: string[] = [];
+        if (res.clientAdded !== undefined || res.clientUpdated !== undefined) {
+          details.push(`${res.clientAdded ?? 0} client(s) added, ${res.clientUpdated ?? 0} updated`);
         }
-
-        const res = await api.importClients(clientsToImport);
+        if (res.adsAdded !== undefined || res.adsUpdated !== undefined) {
+          details.push(`${res.adsAdded ?? 0} ad(s) added, ${res.adsUpdated ?? 0} updated`);
+        }
+        const summary = details.length > 0 ? details.join(' | ') : (res.message || `${res.count} records processed`);
         setBackupNotice({
           type: 'success',
-          text: res.message || `Restored ${res.count} clients without duplicates.`,
+          text: `Backup restored: ${summary}. No duplicates created, matched strictly by ID.`,
         });
         onRefreshClients();
         setTimeout(() => setBackupNotice(null), 6000);
       } catch (err: any) {
         setBackupNotice({
           type: 'error',
-          text: 'Import failed: ' + (err.message || 'Invalid JSON file format'),
+          text: 'Backup import failed: ' + (err.message || 'Invalid JSON file format'),
         });
       } finally {
         setIsImporting(false);
@@ -133,6 +171,30 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
       if (event.target) event.target.value = '';
     };
     reader.readAsText(file);
+  };
+
+  const handleSyncMeta = async (client: Client) => {
+    if (!client.linkedMeta?.adAccountId) {
+      alert(`Client "${client.businessName}" has no linked Meta Ad Account ID. Please configure it in Edit Client before syncing.`);
+      return;
+    }
+    setSyncingClientId(client.id);
+    try {
+      const res = await api.syncClientFromMeta(client.id);
+      setBackupNotice({
+        type: 'success',
+        text: res.message || `Successfully synced ${res.recoveredAds} ad(s) from Meta Ad Account for ${client.businessName}.`,
+      });
+      onRefreshClients();
+      setTimeout(() => setBackupNotice(null), 6000);
+    } catch (err: any) {
+      setBackupNotice({
+        type: 'error',
+        text: `Meta Sync failed: ${err.message || 'Unknown error'}`,
+      });
+    } finally {
+      setSyncingClientId(null);
+    }
   };
 
   const handleCopyAccessCode = (client: Client) => {
@@ -197,8 +259,10 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setGhlApiKey('');
     setAdAccountId('');
     setAdAccountName('');
-    setPageId('');
-    setPageName('');
+    const defaultPage = metaPages[0] || DEFAULT_PORTFOLIO_PAGES[0];
+    setPageId(defaultPage?.id || '959992543870563');
+    setPageName(defaultPage?.name || 'Ecentury Appraisal Services');
+    setIsManualPageInput(false);
     setInstagramUsername('');
     setMonthlyBudget(2500);
     setTargetCpl(30.00);
@@ -229,8 +293,17 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     setGhlApiKey('');
     setAdAccountId(c.linkedMeta.adAccountId || '');
     setAdAccountName(c.linkedMeta.adAccountName || '');
-    setPageId(c.linkedMeta.pageId || '');
-    setPageName(c.linkedMeta.pageName || '');
+    
+    const clientPageId = c.linkedMeta.pageId || '';
+    const matchingPage = metaPages.find(p => p.id === clientPageId);
+    setPageId(clientPageId);
+    setPageName(matchingPage?.name || c.linkedMeta.pageName || '');
+    if (clientPageId && !matchingPage && !DEFAULT_PORTFOLIO_PAGES.some(p => p.id === clientPageId)) {
+      setIsManualPageInput(true);
+    } else {
+      setIsManualPageInput(false);
+    }
+
     setInstagramUsername(c.linkedMeta.instagramUsername || '');
     setMonthlyBudget(c.monthlyBudget);
     setTargetCpl(c.targetCpl || 0);
@@ -301,12 +374,12 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
     try {
       const res = await api.simulateLead({
         clientId: client.id,
-        adId: 'ad-1',
+        adId: '',
         fullName: 'Test Simulated Lead',
-        phone: client.alertPhone || '(480) 555-0100',
+        phone: client.alertPhone || client.contactPhone || '(480) 250-1234',
         email: client.alertEmail || 'lead@example.com',
       });
-      setTestLeadFeedback(`Lead created! Dispatched instant SMS to ${client.alertPhone} and tagged GHL contact with "${res.ghlTag}".`);
+      setTestLeadFeedback(`Lead created! Dispatched instant SMS to ${client.alertPhone || client.contactPhone} and tagged GHL contact with "${res.ghlTag}".`);
       onRefreshClients();
     } catch (err: any) {
       setTestLeadFeedback('Failed to simulate lead: ' + err.message);
@@ -338,23 +411,23 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
           />
 
           <button
-            onClick={handleExportClients}
-            disabled={isExporting || clients.length === 0}
+            onClick={handleExportBackup}
+            disabled={isExporting || (clients.length === 0 && savedAds.length === 0)}
             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
-            title="Download JSON backup file of all clients"
+            title="Download unified JSON backup file of all clients and saved ads (tokens & keys excluded)"
           >
             <Download className="w-3.5 h-3.5 text-slate-500" />
-            <span>{isExporting ? 'Exporting...' : 'Export Clients'}</span>
+            <span>{isExporting ? 'Exporting...' : 'Export Backup'}</span>
           </button>
 
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={isImporting}
             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 px-3.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
-            title="Restore clients from JSON backup file without creating duplicates"
+            title="Restore clients and saved ads from JSON backup file without creating duplicates"
           >
             <Upload className="w-3.5 h-3.5 text-slate-500" />
-            <span>{isImporting ? 'Importing...' : 'Import Clients'}</span>
+            <span>{isImporting ? 'Importing...' : 'Import Backup'}</span>
           </button>
 
           <button
@@ -502,6 +575,14 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
 
                 <div className="flex items-center gap-1">
                   <button
+                    onClick={() => handleSyncMeta(client)}
+                    disabled={syncingClientId === client.id}
+                    className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                    title="Sync campaigns, ad sets & ads from linked Meta Ad Account into Cloud Firestore"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${syncingClientId === client.id ? 'animate-spin text-blue-600' : ''}`} />
+                  </button>
+                  <button
                     onClick={() => openEditModal(client)}
                     className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
                     title="Edit Client"
@@ -642,6 +723,124 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                   </span>
                 </div>
               </div>
+
+              {/* Saved Ads Section (Requirements 1, 2, 3) */}
+              {(() => {
+                const clientAds = (savedAds || []).filter((a: any) => a.clientId === client.id);
+                return (
+                  <div className="mt-3.5 pt-3 border-t border-slate-100">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <Layers className="w-3.5 h-3.5 text-slate-500" />
+                        <span className="text-xs font-bold text-slate-800">
+                          Saved Ads ({clientAds.length})
+                        </span>
+                        {clientAds.length > 0 && (
+                          <span className="text-[10px] text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
+                            Firestore
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => handleSyncMeta(client)}
+                        disabled={syncingClientId === client.id}
+                        className="text-[10px] text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 px-2 py-0.5 rounded font-semibold flex items-center gap-1 border border-blue-200 cursor-pointer disabled:opacity-50"
+                        title="Sync campaigns & ads directly from Meta Ad Account into Firestore"
+                      >
+                        <RefreshCw className={`w-2.5 h-2.5 ${syncingClientId === client.id ? 'animate-spin' : ''}`} />
+                        <span>{syncingClientId === client.id ? 'Syncing...' : 'Sync from Meta'}</span>
+                      </button>
+                    </div>
+
+                    {clientAds.length === 0 ? (
+                      <div className="bg-slate-50 rounded-lg p-2.5 text-center border border-dashed border-slate-200 text-[11px] text-slate-500">
+                        <p>No ads saved in Firestore yet.</p>
+                        <div className="mt-1 flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => onSelectClientForAds(client.id)}
+                            className="text-amber-800 hover:underline font-semibold cursor-pointer"
+                          >
+                            + Create Ad
+                          </button>
+                          <span>•</span>
+                          <button
+                            onClick={() => handleSyncMeta(client)}
+                            disabled={syncingClientId === client.id}
+                            className="text-blue-700 hover:underline font-semibold cursor-pointer"
+                          >
+                            Sync from Meta
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                        {clientAds.map((ad: any) => (
+                          <div
+                            key={ad.id}
+                            className="bg-slate-50/80 hover:bg-slate-100/90 border border-slate-200 rounded-lg p-2 transition-all text-xs flex flex-col gap-1.5"
+                          >
+                            <div className="flex items-start gap-2">
+                              {ad.imageUrl ? (
+                                <img
+                                  src={ad.imageUrl}
+                                  alt={ad.headline || ad.name}
+                                  className="w-10 h-10 rounded object-cover border border-slate-200 shrink-0 bg-slate-200"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded bg-slate-200 flex items-center justify-center text-slate-400 shrink-0">
+                                  <ImageIcon className="w-4 h-4" />
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-1">
+                                  <h4 className="font-bold text-slate-900 truncate text-[11px]" title={ad.headline || ad.name}>
+                                    {ad.headline || ad.name || 'Untitled Ad'}
+                                  </h4>
+                                  <span className={`text-[9px] font-bold px-1.5 py-0.2 rounded shrink-0 ${
+                                    ad.status === 'ACTIVE' 
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' 
+                                      : 'bg-amber-100 text-amber-800 border border-amber-300'
+                                  }`}>
+                                    {ad.status || 'PAUSED'}
+                                  </span>
+                                </div>
+                                <p className="text-[10px] text-slate-600 line-clamp-1 mt-0.5" title={ad.primaryText}>
+                                  {ad.primaryText || ad.description || 'No copy snippet'}
+                                </p>
+                                <div className="flex flex-wrap items-center gap-1 mt-1 text-[9px] text-slate-500 font-mono">
+                                  {ad.metaAdId && (
+                                    <span className="bg-white px-1 py-0.2 rounded border border-slate-200" title={`Meta Ad ID: ${ad.metaAdId}`}>
+                                      ID: {ad.metaAdId}
+                                    </span>
+                                  )}
+                                  {ad.dailyBudget && (
+                                    <span className="bg-white px-1 py-0.2 rounded border border-slate-200 text-slate-700 font-sans font-semibold">
+                                      ${ad.dailyBudget}/day
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-slate-200/60">
+                              {onDuplicateRelaunchAd && (
+                                <button
+                                  onClick={() => onDuplicateRelaunchAd(ad)}
+                                  className="bg-amber-400 hover:bg-amber-500 text-slate-950 px-2 py-0.5 rounded text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+                                  title="Re-open Ad Builder Wizard with all fields already filled in"
+                                >
+                                  <CopyPlus className="w-3 h-3 text-slate-950" />
+                                  <span>Duplicate / Relaunch</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Client Card Bottom Actions */}
@@ -712,7 +911,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     required
                     value={businessName}
                     onChange={(e) => setBusinessName(e.target.value)}
-                    placeholder="e.g. Lumina Aesthetics & Med Spa"
+                    placeholder="e.g. eCentury Appraisal Services"
                     className="w-full border border-slate-300 rounded-lg p-2 font-medium"
                   />
                 </div>
@@ -782,7 +981,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="(480) 555-0192"
+                    placeholder="(480) 250-1234"
                     className="w-full border border-slate-300 rounded-lg p-2"
                   />
                 </div>
@@ -898,7 +1097,7 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                     type="text"
                     value={alertPhone}
                     onChange={(e) => setAlertPhone(e.target.value)}
-                    placeholder="(480) 555-0199"
+                    placeholder="(480) 250-1234"
                     className="w-full border border-slate-300 rounded-lg p-2"
                   />
                 </div>
@@ -963,20 +1162,87 @@ export const ClientManagement: React.FC<ClientManagementProps> = ({
                   </div>
 
                   <div>
-                    <label className="block font-semibold text-slate-700 mb-1 text-xs">
-                      Facebook Page ID *
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={pageId}
-                      onChange={(e) => setPageId(e.target.value)}
-                      placeholder="e.g. 102948192039481"
-                      className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-mono font-medium"
-                    />
-                    <span className="text-[10px] text-amber-800 font-medium">
-                      The ad posts from this Page (Required)
-                    </span>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-semibold text-slate-700 text-xs">
+                        Ad posts as (Facebook Page) *
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setIsManualPageInput(!isManualPageInput)}
+                        className="text-[10px] text-blue-600 hover:text-blue-800 underline cursor-pointer"
+                      >
+                        {isManualPageInput ? 'Select from Page dropdown' : 'Enter Page ID manually'}
+                      </button>
+                    </div>
+
+                    {!isManualPageInput ? (
+                      <div className="space-y-1.5">
+                        <select
+                          value={pageId}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setPageId(val);
+                            const found = metaPages.find(p => p.id === val);
+                            if (found) setPageName(found.name);
+                          }}
+                          className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-medium text-slate-900"
+                        >
+                          {metaPages.map((page) => (
+                            <option key={page.id} value={page.id}>
+                              {page.name} ({page.id})
+                            </option>
+                          ))}
+                        </select>
+
+                        {(() => {
+                          const selectedPage = metaPages.find(p => p.id === pageId) || metaPages[0];
+                          if (!selectedPage) return null;
+                          return (
+                            <div className="flex items-center gap-2 p-1.5 bg-blue-50/70 border border-blue-200 rounded-lg">
+                              {selectedPage.pictureUrl ? (
+                                <img
+                                  src={selectedPage.pictureUrl}
+                                  alt={selectedPage.name}
+                                  className="w-6 h-6 rounded-full object-cover border border-blue-300 shrink-0"
+                                  onError={(e) => { (e.target as HTMLElement).style.display = 'none'; }}
+                                />
+                              ) : (
+                                <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] font-bold shrink-0">
+                                  f
+                                </div>
+                              )}
+                              <div className="min-w-0 flex-1 text-[11px] leading-tight">
+                                <span className="font-semibold text-slate-900 truncate block">
+                                  {selectedPage.name}
+                                </span>
+                                <span className="text-[10px] text-slate-500 font-mono">
+                                  ID: {selectedPage.id}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    ) : (
+                      <div>
+                        <input
+                          type="text"
+                          required
+                          value={pageId}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setPageId(val);
+                            const found = metaPages.find(p => p.id === val);
+                            if (found) setPageName(found.name);
+                          }}
+                          placeholder="e.g. 959992543870563"
+                          className="w-full border border-slate-300 rounded-lg p-2 bg-white text-xs font-mono font-medium"
+                        />
+                        <span className="text-[10px] text-amber-800 font-medium">
+                          The ad posts from this Page (Required)
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
