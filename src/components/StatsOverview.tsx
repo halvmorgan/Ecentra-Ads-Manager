@@ -11,7 +11,8 @@ import {
   Layers, 
   ArrowUpRight, 
   ArrowDownRight,
-  Target
+  Target,
+  AlertCircle
 } from 'lucide-react';
 import { InsightsData } from '../types';
 
@@ -25,10 +26,21 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
   const budgetPercentUsed = insights.monthlyBudget > 0 
     ? Math.min(100, Math.round((insights.totalSpentToDate / insights.monthlyBudget) * 100)) 
     : 0;
-  const hasNoResults = insights.totalSpentToDate === 0 && insights.leads === 0 && insights.clicks === 0;
+  const hasNoResults = insights.totalSpentToDate === 0 && insights.leads === 0 && insights.clicks === 0 && !insights.insightsError;
 
   return (
     <div className="space-y-4 mb-6">
+      {/* Error state if Meta call failed */}
+      {insights.insightsError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-red-900 shadow-2xs">
+          <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+          <div className="min-w-0">
+            <span className="font-bold block text-red-950">Couldn't load from Meta:</span>
+            <span className="font-mono text-[11px] text-red-900 break-words">{insights.insightsError}</span>
+          </div>
+        </div>
+      )}
+
       {hasNoResults && (
         <div className="bg-slate-100/80 border border-slate-200 rounded-xl p-3.5 flex items-center justify-between text-xs text-slate-600">
           <div className="flex items-center gap-2">
@@ -139,10 +151,16 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
           </div>
 
           <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-extrabold text-slate-900 tracking-tight">
-              ${insights.totalSpentToDate.toLocaleString()}
-            </span>
-            <span className="text-xs text-slate-500">this month</span>
+            {insights.insightsError ? (
+              <span className="text-sm font-bold text-red-600">Couldn't load from Meta</span>
+            ) : (
+              <>
+                <span className="text-3xl font-extrabold text-slate-900 tracking-tight">
+                  ${insights.totalSpentToDate.toFixed(2)}
+                </span>
+                <span className="text-xs text-slate-500">this month</span>
+              </>
+            )}
           </div>
 
           {/* Budget progress bar */}
@@ -173,27 +191,63 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({ insights, clientNa
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-100 text-center">
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Link Clicks</span>
-            <span className="text-lg font-bold text-slate-900">{insights.clicks.toLocaleString()}</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                insights.clicks.toLocaleString()
+              )}
+            </span>
           </div>
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Click-Through (CTR)</span>
-            <span className="text-lg font-bold text-slate-900">{insights.ctr.toFixed(2)}%</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                `${insights.ctr.toFixed(2)}%`
+              )}
+            </span>
           </div>
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Reach</span>
-            <span className="text-lg font-bold text-slate-900">{insights.reach.toLocaleString()}</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                insights.reach.toLocaleString()
+              )}
+            </span>
           </div>
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Impressions</span>
-            <span className="text-lg font-bold text-slate-900">{insights.impressions.toLocaleString()}</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                insights.impressions.toLocaleString()
+              )}
+            </span>
           </div>
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Frequency</span>
-            <span className="text-lg font-bold text-slate-900">{insights.frequency.toFixed(2)}</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                insights.frequency.toFixed(2)
+              )}
+            </span>
           </div>
           <div className="pt-2 sm:pt-0 sm:px-2">
             <span className="text-[11px] font-medium text-slate-500 block uppercase">Cost / Click (CPC)</span>
-            <span className="text-lg font-bold text-slate-900">${insights.cpc.toFixed(2)}</span>
+            <span className="text-lg font-bold text-slate-900">
+              {insights.insightsError ? (
+                <span className="text-xs font-semibold text-red-600">Couldn't load from Meta</span>
+              ) : (
+                `$${insights.cpc.toFixed(2)}`
+              )}
+            </span>
           </div>
         </div>
       </div>

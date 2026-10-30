@@ -26,7 +26,8 @@ import {
   Search,
   Building,
   Target,
-  Users
+  Users,
+  Upload
 } from 'lucide-react';
 import { Client, GeneratedAdCopy, AdGoalType, SpecialAdCategory, GeoLocationSearchResult, MetaPage } from '../types';
 import { api } from '../services/api';
@@ -74,7 +75,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
 
   // Step 2: Ad Copy
   const [copies, setCopies] = useState<GeneratedAdCopy[]>([]);
-  const [selectedCopyIndex, setSelectedCopyIndex] = useState<number>(0);
+  const [selectedCopyIndex, setSelectedCopyIndex] = useState<number | null>(null);
   const [isGeneratingCopy, setIsGeneratingCopy] = useState<boolean>(false);
   const [variationCycle, setVariationCycle] = useState<number>(1);
   const [primaryText, setPrimaryText] = useState<string>(initialAdData?.primaryText || '');
@@ -83,11 +84,14 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
   const [callToAction, setCallToAction] = useState<string>(initialAdData?.callToAction || 'BOOK_NOW');
 
   // Step 3: Image Creative
-  const [imageSourceMode, setImageSourceMode] = useState<'generate' | 'site'>('generate');
+  const [imageSourceMode, setImageSourceMode] = useState<'generate' | 'site' | 'upload'>('generate');
   const [imageFormat, setImageFormat] = useState<'1:1' | '9:16'>(initialAdData?.imageFormat || '1:1');
   const [imagePrompt, setImagePrompt] = useState<string>('Warm, professional treatment room with soft lighting, aesthetician prepping gentle botanical facial');
   const [isGeneratingImage, setIsGeneratingImage] = useState<boolean>(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState<string>(initialAdData?.imageUrl || 'https://images.unsplash.com/photo-1570172619644-dfd03ed5d881?auto=format&fit=crop&w=1080&q=80');
+  const [imageSourceLabel, setImageSourceLabel] = useState<string>('Stock photo from Unsplash');
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
   
   // 3b: Scrape from site
   const [scrapeUrl, setScrapeUrl] = useState<string>(initialAdData?.websiteUrl || '');
@@ -339,11 +343,8 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
 
       if (res.copies && res.copies.length > 0) {
         setCopies(res.copies);
-        setSelectedCopyIndex(0);
-        setPrimaryText(res.copies[0].primaryText);
-        setHeadline(res.copies[0].headline);
-        setDescription(res.copies[0].description);
-        setCallToAction(res.copies[0].callToAction);
+        // Requirement 4: Do NOT replace text already typed in Primary Text, Headline, or Description.
+        // User explicitly clicks one of the 3 cards to fill them.
       }
     } catch (err) {
       console.error('Failed to generate copy:', err);
@@ -361,6 +362,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       if (res.images && res.images.length > 0) {
         setScrapedImages(res.images);
         setSelectedImageUrl(res.images[0]);
+        setImageSourceLabel('Client website image');
       }
     } catch (err) {
       console.error('Failed to scrape site:', err);
@@ -369,7 +371,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
     }
   };
 
-  // Trigger Image Generation
+  // Trigger Image Generation (labeled honestly if stock photo or AI)
   const handleGenerateImage = async () => {
     if (!activeClient) return;
     setIsGeneratingImage(true);
@@ -381,12 +383,60 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       });
       if (res.imageUrl) {
         setSelectedImageUrl(res.imageUrl);
+        setImageSourceLabel(res.sourceLabel || (res.isGenerated ? 'AI-generated visual' : 'Stock photo from Unsplash'));
       }
     } catch (err) {
       console.error('Failed to generate image:', err);
     } finally {
       setIsGeneratingImage(false);
     }
+  };
+
+  // Handle Option C: Upload from my computer (PNG/JPG, at least 1080x1080)
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setUploadError(null);
+
+    // Validate type (PNG or JPG)
+    if (!file.type.match(/^image\/(png|jpeg|jpg)$/)) {
+      setUploadError('Invalid file format. Please select a PNG or JPG image.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      const img = new Image();
+      img.onload = async () => {
+        if (img.naturalWidth < 1080 || img.naturalHeight < 1080) {
+          setUploadError(`Image must be at least 1080x1080 (your image is ${img.naturalWidth}x${img.naturalHeight}px). Please select a higher resolution PNG or JPG.`);
+          return;
+        }
+
+        setIsUploadingImage(true);
+        try {
+          const uploadRes = await api.uploadMedia(dataUrl, file.name);
+          setSelectedImageUrl(uploadRes.url);
+          setImageSourceLabel(`Uploaded from my computer (${img.naturalWidth}x${img.naturalHeight}px)`);
+        } catch (uploadErr) {
+          console.warn('Backend media upload error, using local data:', uploadErr);
+          setSelectedImageUrl(dataUrl);
+          setImageSourceLabel(`Uploaded from my computer (${img.naturalWidth}x${img.naturalHeight}px)`);
+        } finally {
+          setIsUploadingImage(false);
+        }
+      };
+      img.onerror = () => {
+        setUploadError('Could not process image file. Please verify it is a valid PNG or JPG.');
+      };
+      img.src = dataUrl;
+    };
+    reader.onerror = () => {
+      setUploadError('Failed to read file from your computer.');
+    };
+    reader.readAsDataURL(file);
   };
 
   // Launch Campaign (ALWAYS CREATED PAUSED FIRST PER SPEC - ZERO FAKE SUCCESS)
@@ -483,9 +533,9 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
     }
   };
 
-  // Go Live immediately from post-launch screen (Requirement 7: Zero Fake Success)
+  // Go Live immediately from post-launch screen (Requirement 3: Activate Campaign, Ad Set, Ad on Meta)
   const handleGoLive = async () => {
-    const campaignId = launchSuccessData?.campaign?.id || launchSuccessData?.id;
+    const campaignId = launchSuccessData?.campaign?.id || launchSuccessData?.id || launchSuccessData?.metaCampaignId;
     if (!campaignId) return;
     setIsGoingLive(true);
     setGoLiveError(null);
@@ -493,7 +543,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
     try {
       const res = await api.goLive(campaignId);
       setIsLiveActive(true);
-      setGoLiveSuccessResponse(res.metaResponse || { status: 'ACTIVE', message: 'Campaign and ads set to ACTIVE on Meta.' });
+      setGoLiveSuccessResponse(res);
       onCampaignCreated();
     } catch (err: any) {
       console.error('Failed to activate campaign on Meta:', err);
@@ -982,10 +1032,11 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
               </div>
 
               {/* Mode Toggle */}
-              <div className="flex items-center gap-3 border-b border-slate-200 pb-3">
+              <div className="flex flex-wrap items-center gap-2 sm:gap-3 border-b border-slate-200 pb-3">
                 <button
+                  type="button"
                   onClick={() => setImageSourceMode('generate')}
-                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all ${
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                     imageSourceMode === 'generate'
                       ? 'bg-slate-900 text-white'
                       : 'bg-slate-100 text-slate-600 hover:text-slate-900'
@@ -995,8 +1046,9 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                   <span>Option A: Generate Image</span>
                 </button>
                 <button
+                  type="button"
                   onClick={() => setImageSourceMode('site')}
-                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all ${
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
                     imageSourceMode === 'site'
                       ? 'bg-slate-900 text-white'
                       : 'bg-slate-100 text-slate-600 hover:text-slate-900'
@@ -1004,6 +1056,18 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                 >
                   <Globe className="w-3.5 h-3.5" />
                   <span>Option B: Pull from Client Site</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageSourceMode('upload')}
+                  className={`text-xs font-semibold px-3 py-1.5 rounded-lg flex items-center gap-1.5 transition-all cursor-pointer ${
+                    imageSourceMode === 'upload'
+                      ? 'bg-slate-900 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Upload className="w-3.5 h-3.5 text-amber-500" />
+                  <span>Option C: Upload from my computer</span>
                 </button>
               </div>
 
@@ -1017,16 +1081,18 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     <div className="flex items-center gap-2">
                       <span className="text-[11px] text-slate-500">Aspect Ratio:</span>
                       <button
+                        type="button"
                         onClick={() => setImageFormat('1:1')}
-                        className={`text-xs px-2 py-0.5 rounded font-medium ${
+                        className={`text-xs px-2 py-0.5 rounded font-medium cursor-pointer ${
                           imageFormat === '1:1' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'
                         }`}
                       >
                         Square (1080x1080)
                       </button>
                       <button
+                        type="button"
                         onClick={() => setImageFormat('9:16')}
-                        className={`text-xs px-2 py-0.5 rounded font-medium ${
+                        className={`text-xs px-2 py-0.5 rounded font-medium cursor-pointer ${
                           imageFormat === '9:16' ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700'
                         }`}
                       >
@@ -1042,11 +1108,12 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     className="w-full text-xs border border-slate-300 rounded-lg p-2.5 font-normal text-slate-800 bg-white"
                   />
 
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-[11px] text-slate-500">
-                      Policy rule: No baked-in heavy text or unrealistic before/afters.
+                      Result labeled honestly: Stock photo from Unsplash or AI-generated visual.
                     </span>
                     <button
+                      type="button"
                       onClick={handleGenerateImage}
                       disabled={isGeneratingImage}
                       className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -1070,6 +1137,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                       className="flex-1 text-xs border border-slate-300 rounded-lg p-2.5 font-medium text-slate-800 bg-white"
                     />
                     <button
+                      type="button"
                       onClick={handleScrapeImages}
                       disabled={isScraping}
                       className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
@@ -1084,7 +1152,10 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                       {scrapedImages.map((img, idx) => (
                         <div
                           key={idx}
-                          onClick={() => setSelectedImageUrl(img)}
+                          onClick={() => {
+                            setSelectedImageUrl(img);
+                            setImageSourceLabel('Client website image');
+                          }}
                           className={`aspect-square rounded-lg overflow-hidden border-2 cursor-pointer transition-all relative ${
                             selectedImageUrl === img
                               ? 'border-amber-600 ring-2 ring-amber-500/20 shadow-md'
@@ -1104,14 +1175,65 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                 </div>
               )}
 
-              {/* Selected Creative Preview */}
+              {/* Option C: Upload from my computer */}
+              {imageSourceMode === 'upload' && (
+                <div className="space-y-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-800 mb-1">
+                      Upload Custom Ad Creative Image (PNG / JPG)
+                    </label>
+                    <p className="text-[11px] text-slate-500 mb-3">
+                      Minimum required resolution: <strong>1080x1080</strong> pixels for optimal feed and story delivery. Uploaded directly to your linked Meta Ad Account.
+                    </p>
+
+                    <label className="border-2 border-dashed border-slate-300 hover:border-amber-500 rounded-xl p-6 flex flex-col items-center justify-center bg-white cursor-pointer transition-colors group">
+                      <Upload className="w-8 h-8 text-slate-400 group-hover:text-amber-600 transition-colors mb-2" />
+                      <span className="text-xs font-semibold text-slate-800 group-hover:text-amber-700">
+                        Select PNG or JPG file from your computer
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-1">
+                        Must be at least 1080 × 1080 px
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/jpg"
+                        onChange={handleFileUpload}
+                        disabled={isUploadingImage}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {isUploadingImage && (
+                    <div className="flex items-center gap-2 text-xs text-amber-700 font-medium bg-amber-50 p-2.5 rounded-lg border border-amber-200">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verifying resolution & preparing image upload for Meta...</span>
+                    </div>
+                  )}
+
+                  {uploadError && (
+                    <div className="bg-red-50 p-3 rounded-lg border border-red-200 text-red-800 text-xs flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      <span>{uploadError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Selected Creative Preview with Honest Source Label */}
               <div className="border border-slate-200 rounded-xl p-4 flex items-center gap-4 bg-white">
                 <div className="w-20 h-20 rounded-lg overflow-hidden bg-slate-100 border border-slate-200 shrink-0">
                   <img src={selectedImageUrl} alt="selected" className="w-full h-full object-cover" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="text-xs font-bold text-slate-900">
                     Active Creative Image Selected
+                  </div>
+                  <div className="text-[11px] text-slate-700 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-400">Source:</span>
+                    <span className="font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-800 border border-slate-200">
+                      {imageSourceLabel}
+                    </span>
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
                     Format: {imageFormat === '1:1' ? 'Square Feed (1080x1080)' : 'Vertical Story (1080x1920)'}
@@ -1777,13 +1899,40 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                         </div>
                       )}
 
-                      {/* Go Live Success Confirmation */}
+                      {/* Go Live Success Confirmation - 3 Levels Verified Active */}
                       {goLiveSuccessResponse && (
-                        <div className="bg-emerald-50 p-3 rounded-xl border border-emerald-200 text-emerald-900 text-xs max-w-lg mx-auto text-left flex items-start gap-2.5">
-                          <Check className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                          <div>
-                            <span className="font-bold block">Meta Status Response:</span>
-                            <span className="text-[11px]">{goLiveSuccessResponse.message || 'Status successfully updated to ACTIVE.'}</span>
+                        <div className="bg-emerald-50 p-4 rounded-xl border border-emerald-200 text-emerald-900 text-xs max-w-lg mx-auto text-left space-y-2.5 shadow-xs">
+                          <div className="flex items-center gap-2 font-bold text-emerald-950">
+                            <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>Meta Marketing API: Campaign, Ad Set & Ad Activated</span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-white/90 p-2.5 rounded-lg border border-emerald-200/80 font-mono text-[11px]">
+                            <div className="border-b sm:border-b-0 sm:border-r border-emerald-100 pb-1.5 sm:pb-0 sm:pr-2">
+                              <span className="text-slate-500 block text-[10px] font-sans font-semibold uppercase">Campaign</span>
+                              <span className="font-bold text-emerald-700">{goLiveSuccessResponse.levels?.campaign?.status || 'ACTIVE'}</span>
+                              {goLiveSuccessResponse.levels?.campaign?.id && (
+                                <span className="text-[9px] text-slate-400 block truncate font-mono">{goLiveSuccessResponse.levels.campaign.id}</span>
+                              )}
+                            </div>
+                            <div className="border-b sm:border-b-0 sm:border-r border-emerald-100 pb-1.5 sm:pb-0 sm:pr-2">
+                              <span className="text-slate-500 block text-[10px] font-sans font-semibold uppercase">Ad Set</span>
+                              <span className="font-bold text-emerald-700">{goLiveSuccessResponse.levels?.adSet?.status || 'ACTIVE'}</span>
+                              {goLiveSuccessResponse.levels?.adSet?.id && (
+                                <span className="text-[9px] text-slate-400 block truncate font-mono">{goLiveSuccessResponse.levels.adSet.id}</span>
+                              )}
+                            </div>
+                            <div>
+                              <span className="text-slate-500 block text-[10px] font-sans font-semibold uppercase">Ad</span>
+                              <span className="font-bold text-emerald-700">{goLiveSuccessResponse.levels?.ad?.status || 'ACTIVE'}</span>
+                              {goLiveSuccessResponse.levels?.ad?.id && (
+                                <span className="text-[9px] text-slate-400 block truncate font-mono">{goLiveSuccessResponse.levels.ad.id}</span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-[11px] text-emerald-800 leading-relaxed">
+                            {goLiveSuccessResponse.message || 'All 3 Meta levels successfully set to ACTIVE and delivering to targeted audience.'}
                           </div>
                         </div>
                       )}

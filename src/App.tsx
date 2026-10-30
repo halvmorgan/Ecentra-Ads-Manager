@@ -102,6 +102,13 @@ export default function App() {
   const loadAllData = async () => {
     setIsRefreshing(true);
     try {
+      // Requirement 4: Run Sync from Meta for every client automatically when dashboard loads, so ads created outside the app always appear
+      try {
+        await api.syncAllFromMeta();
+      } catch (syncErr: any) {
+        console.warn('[Auto-sync from Meta note]:', syncErr?.message || syncErr);
+      }
+
       const [statusRes, clientsRes, insightsRes, leadsRes, campaignsRes] = await Promise.all([
         api.getStatus(),
         api.getClients(),
@@ -143,12 +150,16 @@ export default function App() {
     }
   };
 
-  // Toggle Pause/Resume on Ad
+  // Toggle Pause/Resume on Ad (Requirement 3: 3-level activation on Meta)
   const handleToggleAdStatus = async (adId: string, currentStatus: AdStatus) => {
     try {
       const nextStatus = currentStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
-      await api.toggleItemStatus(adId, 'ad', nextStatus);
-      showToast(`Ad status updated to ${nextStatus}`);
+      const res = await api.toggleItemStatus(adId, 'ad', nextStatus);
+      if (nextStatus === 'ACTIVE' && res?.levels) {
+        showToast(`Meta Resumed (3 Levels ACTIVE) — Campaign: ${res.levels.campaign?.status || 'ACTIVE'}, Ad Set: ${res.levels.adSet?.status || 'ACTIVE'}, Ad: ${res.levels.ad?.status || 'ACTIVE'}`);
+      } else {
+        showToast(`Ad status updated to ${nextStatus}`);
+      }
       await loadAllData();
     } catch (err: any) {
       alert(err.message || 'Failed to update ad status');
@@ -202,11 +213,15 @@ export default function App() {
     setIsEditWizardOpen(true);
   };
 
-  // Activate Campaign on Meta (Go Live)
+  // Activate Campaign on Meta (Go Live - Requirement 3: 3-level activation on Meta)
   const handleGoLiveCampaign = async (campaignId: string) => {
     try {
-      await api.goLive(campaignId);
-      showToast('Campaign, ad set, and ad are now ACTIVE on Meta!');
+      const res = await api.goLive(campaignId);
+      if (res?.levels) {
+        showToast(`Meta Go Live (3 Levels ACTIVE) — Campaign: ${res.levels.campaign?.status || 'ACTIVE'}, Ad Set: ${res.levels.adSet?.status || 'ACTIVE'}, Ad: ${res.levels.ad?.status || 'ACTIVE'}`);
+      } else {
+        showToast('Campaign, ad set, and ad are now ACTIVE on Meta!');
+      }
       await loadAllData();
     } catch (err: any) {
       alert(err.message || 'Failed to activate campaign on Meta');

@@ -212,82 +212,97 @@ export const AdsTable: React.FC<AdsTableProps> = ({
                     {getStatusBadge(ad.status, ad.effectiveStatus, ad.rejectionReason)}
                   </td>
 
-                  {/* Cost Per Lead or Cost Per Click */}
-                  <td className="py-3.5 px-3 whitespace-nowrap">
-                    {ad.goalType === 'TRAFFIC_WEBSITE' ? (
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-sm font-bold text-slate-900">
-                            ${(ad.cpc || (ad.clicks > 0 ? ad.spend / ad.clicks : 0)).toFixed(2)}
-                          </span>
-                          <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-blue-50 text-blue-700">
-                            CPC
-                          </span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          Direct Website Traffic
+                  {/* Stats columns or Couldn't load from Meta error notice */}
+                  {ad.insightsError ? (
+                    <td colSpan={5} className="py-3.5 px-3 text-left">
+                      <div className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs font-medium max-w-md shadow-2xs">
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                        <div>
+                          <span className="font-bold text-red-900">Couldn't load from Meta: </span>
+                          <span className="text-[11px] text-red-700">{ad.insightsError}</span>
                         </div>
                       </div>
-                    ) : (
-                      <div>
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-sm font-bold ${
-                            isOverTarget ? 'text-red-600' : 'text-slate-900'
-                          }`}>
-                            ${ad.cpl > 0 ? ad.cpl.toFixed(2) : '0.00'}
+                    </td>
+                  ) : (
+                    <>
+                      {/* Cost Per Lead or Cost Per Click */}
+                      <td className="py-3.5 px-3 whitespace-nowrap">
+                        {ad.goalType === 'TRAFFIC_WEBSITE' ? (
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm font-bold text-slate-900">
+                                ${(ad.cpc || (ad.clicks > 0 ? ad.spend / ad.clicks : 0)).toFixed(2)}
+                              </span>
+                              <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-blue-50 text-blue-700">
+                                CPC
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              Direct Website Traffic
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-sm font-bold ${
+                                isOverTarget ? 'text-red-600' : 'text-slate-900'
+                              }`}>
+                                ${ad.cpl > 0 ? ad.cpl.toFixed(2) : '0.00'}
+                              </span>
+                              {ad.cpl > 0 && !ad.isOwnBusiness && (
+                                <span className={`text-[10px] font-semibold px-1 rounded ${
+                                  isOverTarget ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
+                                }`}>
+                                  {isOverTarget ? 'High' : 'On Target'}
+                                </span>
+                              )}
+                              {ad.isOwnBusiness && (
+                                <span className="text-[10px] font-semibold px-1 rounded bg-amber-50 text-amber-800">
+                                  Own Business
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              {ad.isOwnBusiness ? 'No Target CPL' : `Target: $${ad.targetCpl.toFixed(2)}`}
+                            </div>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Results: Leads or Link Clicks */}
+                      <td className="py-3.5 px-3 text-right whitespace-nowrap">
+                        {ad.goalType === 'TRAFFIC_WEBSITE' ? (
+                          <div>
+                            <div className="font-semibold text-slate-900 text-sm">
+                              {ad.clicks.toLocaleString()} clicks
+                            </div>
+                            <div className="text-[10px] text-slate-500">
+                              {ad.landingPageViews || Math.round(ad.clicks * 0.88)} views
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="font-semibold text-slate-900 text-sm">
+                            {ad.leads}
                           </span>
-                          {ad.cpl > 0 && !ad.isOwnBusiness && (
-                            <span className={`text-[10px] font-semibold px-1 rounded ${
-                              isOverTarget ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'
-                            }`}>
-                              {isOverTarget ? 'High' : 'On Target'}
-                            </span>
-                          )}
-                          {ad.isOwnBusiness && (
-                            <span className="text-[10px] font-semibold px-1 rounded bg-amber-50 text-amber-800">
-                              Own Business
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-slate-500 mt-0.5">
-                          {ad.isOwnBusiness ? 'No Target CPL' : `Target: $${ad.targetCpl.toFixed(2)}`}
-                        </div>
-                      </div>
-                    )}
-                  </td>
+                        )}
+                      </td>
 
-                  {/* Results: Leads or Link Clicks */}
-                  <td className="py-3.5 px-3 text-right whitespace-nowrap">
-                    {ad.goalType === 'TRAFFIC_WEBSITE' ? (
-                      <div>
-                        <div className="font-semibold text-slate-900 text-sm">
-                          {ad.clicks.toLocaleString()} clicks
-                        </div>
-                        <div className="text-[10px] text-slate-500">
-                          {ad.landingPageViews || Math.round(ad.clicks * 0.88)} views
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="font-semibold text-slate-900 text-sm">
-                        {ad.leads}
-                      </span>
-                    )}
-                  </td>
+                      {/* Spend */}
+                      <td className="py-3.5 px-3 text-right whitespace-nowrap font-medium text-slate-900">
+                        ${ad.spend.toFixed(2)}
+                      </td>
 
-                  {/* Spend */}
-                  <td className="py-3.5 px-3 text-right whitespace-nowrap font-medium text-slate-900">
-                    ${ad.spend.toLocaleString()}
-                  </td>
+                      {/* CTR */}
+                      <td className="py-3.5 px-3 text-right whitespace-nowrap text-slate-700">
+                        {ad.ctr.toFixed(2)}%
+                      </td>
 
-                  {/* CTR */}
-                  <td className="py-3.5 px-3 text-right whitespace-nowrap text-slate-700">
-                    {ad.ctr.toFixed(2)}%
-                  </td>
-
-                  {/* Clicks */}
-                  <td className="py-3.5 px-3 text-right whitespace-nowrap text-slate-600">
-                    {ad.clicks.toLocaleString()}
-                  </td>
+                      {/* Clicks */}
+                      <td className="py-3.5 px-3 text-right whitespace-nowrap text-slate-600">
+                        {ad.clicks.toLocaleString()}
+                      </td>
+                    </>
+                  )}
 
                   {/* One-Click Action Controls */}
                   <td className="py-3.5 px-4 whitespace-nowrap text-center" onClick={(e) => e.stopPropagation()}>

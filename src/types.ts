@@ -213,6 +213,7 @@ export interface InsightsData {
   cpc: number;
   landingPageViews?: number;
   dailyBreakdown: DailyInsight[];
+  insightsError?: string | null;
 }
 
 export interface MetaConnectionState {
@@ -295,6 +296,7 @@ export interface AdStatItem {
   campaignId?: string;
   adSetId?: string;
   websiteUrl?: string;
+  insightsError?: string | null;
 }
 
 export interface AdDetailData {

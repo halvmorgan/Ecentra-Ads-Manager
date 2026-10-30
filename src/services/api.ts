@@ -247,6 +247,21 @@ export const api = {
     };
   },
 
+  async syncAllFromMeta() {
+    const headers = await getHeaders();
+    const res = await fetch('/api/meta/sync-all', {
+      method: 'POST',
+      headers,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to sync all clients from Meta');
+    return data as {
+      success: boolean;
+      totalRecoveredAds: number;
+      totalRecoveredCampaigns: number;
+    };
+  },
+
   async simulateLead(payload: { 
     clientId: string; 
     adId?: string; 
@@ -555,7 +570,24 @@ export const api = {
       format: string;
       description: string;
       isGenerated?: boolean;
+      source?: string;
+      sourceLabel?: string;
     }>;
+  },
+
+  // Upload ad image from computer
+  async uploadMedia(dataUrl: string, filename?: string) {
+    const headers = await getHeaders();
+    const res = await fetch('/api/media/upload', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ dataUrl, filename }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to upload image file');
+    }
+    return res.json() as Promise<{ success: boolean; url: string; mimeType: string; size: number }>;
   },
 
   // Weekly Report
