@@ -277,7 +277,7 @@ export const AdsTable: React.FC<AdsTableProps> = ({
                               {ad.clicks.toLocaleString()} clicks
                             </div>
                             <div className="text-[10px] text-slate-500">
-                              {ad.landingPageViews || Math.round(ad.clicks * 0.88)} views
+                              {(ad.impressions ?? 0).toLocaleString()} views
                             </div>
                           </div>
                         ) : (

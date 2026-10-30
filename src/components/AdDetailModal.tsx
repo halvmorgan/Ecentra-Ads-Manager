@@ -299,7 +299,7 @@ export const AdDetailModal: React.FC<AdDetailModalProps> = ({
                   </div>
                   <span className="text-[10px] text-slate-500 mt-1 inline-block">
                     {ad?.goalType === 'TRAFFIC_WEBSITE'
-                      ? `${stats?.landingPageViews || Math.round((stats?.clicks || 0) * 0.88)} landing page views`
+                      ? `${(stats?.impressions ?? 0).toLocaleString()} views (impressions)`
                       : 'Verified Form Submissions'}
                   </span>
                 </div>

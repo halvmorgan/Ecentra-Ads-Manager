@@ -282,6 +282,7 @@ export interface AdStatItem {
   leads: number;
   cpl: number;
   cpc?: number;
+  impressions?: number;
   landingPageViews?: number;
   linkClicks?: number;
   last7DayCpl: number;
