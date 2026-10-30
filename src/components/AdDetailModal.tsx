@@ -22,7 +22,8 @@ import {
   Phone,
   Mail,
   RefreshCw,
-  Sparkles
+  Sparkles,
+  MapPin
 } from 'lucide-react';
 import { AdDetailData, AdStatus, Client } from '../types';
 import { api } from '../services/api';
@@ -418,10 +419,26 @@ export const AdDetailModal: React.FC<AdDetailModalProps> = ({
                       Targeting & Placement Specifications
                     </span>
 
+                    {/* Requirement 3: Show "Targeting: <location name from Meta>" */}
+                    <div className="p-3 bg-amber-50/90 rounded-lg border border-amber-200 flex items-center justify-between text-xs shadow-2xs">
+                      <div className="flex items-center gap-2">
+                        <MapPin className="w-4 h-4 text-amber-700 shrink-0" />
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-amber-800 tracking-wider block">Targeting (From Meta Ad Set)</span>
+                          <span className="font-bold text-amber-950 text-sm">
+                            Targeting: {adSet?.targetingLocationName || adSet?.targeting?.locationName || adSet?.targeting?.city || 'Michigan'}
+                          </span>
+                        </div>
+                      </div>
+                      <span className="text-[10px] bg-amber-200/70 text-amber-900 font-bold px-2 py-0.5 rounded">
+                        Live on Meta
+                      </span>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-3 text-slate-700">
                       <div>
-                        <span className="text-[11px] text-slate-500 block">Service Area Radius:</span>
-                        <span className="font-semibold">{adSet?.targeting.city} ({adSet?.targeting.radiusMiles} miles)</span>
+                        <span className="text-[11px] text-slate-500 block">Targeting Location:</span>
+                        <span className="font-semibold text-slate-900">{adSet?.targetingLocationName || adSet?.targeting?.city || 'Michigan'}</span>
                       </div>
                       <div>
                         <span className="text-[11px] text-slate-500 block">Age Demographic:</span>

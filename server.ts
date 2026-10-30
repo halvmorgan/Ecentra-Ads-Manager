@@ -1489,6 +1489,36 @@ app.post('/api/settings/toggle-demo', requireAdmin, async (req: Request, res: Re
   });
 });
 
+// Helper: Formats location name from Meta Ad Set targeting.geo_locations (Requirement 2 & 3)
+function formatLocationFromGeoLocations(geoLocations: any): string {
+  if (!geoLocations) return 'Michigan';
+  if (geoLocations.regions && Array.isArray(geoLocations.regions) && geoLocations.regions.length > 0) {
+    const regNames = geoLocations.regions.map((r: any) => {
+      if (r.name) return r.name;
+      const keyStr = String(r.key || '');
+      if (keyStr === '3865') return 'Michigan';
+      if (keyStr === '3866') return 'Minnesota';
+      return `Region #${keyStr}`;
+    });
+    return regNames.join(', ');
+  }
+  if (geoLocations.cities && Array.isArray(geoLocations.cities) && geoLocations.cities.length > 0) {
+    const cityNames = geoLocations.cities.map((c: any) => {
+      const radiusPart = c.radius ? ` (+${c.radius} ${c.distance_unit || 'mi'})` : '';
+      return `${c.name || 'City'}${radiusPart}`;
+    });
+    return cityNames.join(', ');
+  }
+  if (geoLocations.custom_locations && Array.isArray(geoLocations.custom_locations) && geoLocations.custom_locations.length > 0) {
+    const cl = geoLocations.custom_locations[0];
+    return `Custom Coordinates (+${cl.radius || 15} mi)`;
+  }
+  if (geoLocations.countries && Array.isArray(geoLocations.countries) && geoLocations.countries.length > 0) {
+    return geoLocations.countries.join(', ');
+  }
+  return 'Michigan';
+}
+
 // Location Search via Meta Targeting Search API (ADMIN PROTECTED - Requirement 2 & 5)
 app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Response) => {
   const query = (req.query.q as string || '').trim();
@@ -1536,7 +1566,7 @@ app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Re
     { key: '2483861', name: 'Grand Rapids', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.9634, longitude: -85.6681 },
     { key: '2484490', name: 'Ann Arbor', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.2808, longitude: -83.743 },
     { key: '2484042', name: 'Lansing', type: 'city', country_code: 'US', region: 'Michigan', latitude: 42.7325, longitude: -84.5555 },
-    { key: '3866', name: 'Michigan', type: 'region', country_code: 'US', region: 'United States' },
+    { key: '3865', name: 'Michigan', type: 'region', country_code: 'US', region: 'United States' },
     { key: '2479201', name: 'Denver', type: 'city', country_code: 'US', region: 'Colorado', latitude: 39.7392, longitude: -104.9903 },
     { key: '3852', name: 'California', type: 'region', country_code: 'US', region: 'United States' },
     { key: '3853', name: 'Colorado', type: 'region', country_code: 'US', region: 'United States' },
@@ -2836,6 +2866,45 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
   const effectiveRadius = isSpecialCategory ? Math.max(Number(radiusMiles) || 15, 15) : (Number(radiusMiles) || 15);
   const destinationLink = websiteUrl || client.websiteUrl || 'https://ecentraconcierge.com';
 
+  // Build and validate geoLocations BEFORE creating campaign on Meta (Requirement 4)
+  const geoLocations: any = {};
+  if (locationType === 'region' || locationType === 'state') {
+    const locKey = locationKey || (city?.toLowerCase() === 'michigan' ? '3865' : '');
+    if (!locKey) {
+      return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
+    }
+    // Meta region key for Michigan is 3865 (3866 is Minnesota)
+    const sanitizedKey = (locKey === '3866' && city?.toLowerCase() === 'michigan') ? '3865' : String(locKey);
+    geoLocations.regions = [{ key: sanitizedKey }];
+  } else if (locationKey && (locationType === 'city' || !latitude)) {
+    geoLocations.cities = [{
+      key: String(locationKey),
+      radius: effectiveRadius,
+      distance_unit: 'mile',
+    }];
+  } else if (latitude && longitude) {
+    geoLocations.custom_locations = [{
+      latitude: Number(latitude),
+      longitude: Number(longitude),
+      radius: effectiveRadius,
+      distance_unit: 'mile',
+    }];
+  } else if (city && String(city).trim()) {
+    if (String(city).trim().toLowerCase() === 'michigan') {
+      geoLocations.regions = [{ key: '3865' }];
+    } else {
+      geoLocations.cities = [{
+        name: String(city).trim(),
+        radius: effectiveRadius,
+        distance_unit: 'mile',
+      }];
+    }
+  } else {
+    return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
+  }
+
+  let targetingLocationName = formatLocationFromGeoLocations(geoLocations);
+
   try {
     // ------------------------------------------------------------------------
     // Step a. Campaign:
@@ -2873,35 +2942,6 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
     // status: PAUSED
     // ------------------------------------------------------------------------
     currentStepName = 'ad set';
-    const geoLocations: any = {};
-    if (locationType === 'region' || locationType === 'state') {
-      if (!locationKey) {
-        return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
-      }
-      geoLocations.regions = [{ key: String(locationKey) }];
-    } else if (locationKey && (locationType === 'city' || !latitude)) {
-      geoLocations.cities = [{
-        key: String(locationKey),
-        radius: effectiveRadius,
-        distance_unit: 'mile',
-      }];
-    } else if (latitude && longitude) {
-      geoLocations.custom_locations = [{
-        latitude: Number(latitude),
-        longitude: Number(longitude),
-        radius: effectiveRadius,
-        distance_unit: 'mile',
-      }];
-    } else if (city && String(city).trim()) {
-      geoLocations.cities = [{
-        name: String(city).trim(),
-        radius: effectiveRadius,
-        distance_unit: 'mile',
-      }];
-    } else {
-      return res.status(400).json({ error: 'Pick a location first.', failedStep: 'location_check' });
-    }
-
     const dailyBudgetCents = Math.round((Number(dailyBudget) || 1) * 100);
 
     const adSetPayload: any = {
@@ -2942,6 +2982,19 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
     });
     metaAdSetId = adSetRes.id;
     createdEntities.push({ type: 'adset', id: metaAdSetId });
+
+    // Read back targeting from Meta immediately (Requirement 3)
+    try {
+      const readBackAdSet = await callMetaApi(metaAdSetId, {
+        token,
+        params: { fields: 'id,name,targeting' }
+      });
+      if (readBackAdSet.targeting?.geo_locations) {
+        targetingLocationName = formatLocationFromGeoLocations(readBackAdSet.targeting.geo_locations);
+      }
+    } catch (readErr: any) {
+      console.warn('[Ad Set Readback Warning]:', readErr.message);
+    }
 
     // ------------------------------------------------------------------------
     // Step c. Image:
@@ -3047,12 +3100,26 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
 
   } catch (metaErr: any) {
     console.error(`Meta Ad Creation Failed at step [${currentStepName}]:`, metaErr);
-    // ROLLBACK: Delete any created entities on Meta in reverse order
-    for (const ent of createdEntities.reverse()) {
+    // ROLLBACK: Delete any created entities on Meta in reverse order (Requirement 4)
+    for (const ent of [...createdEntities].reverse()) {
+      if (!ent.id) continue;
       try {
+        console.log(`[Rollback] Deleting Meta entity ${ent.type} (${ent.id})`);
         await callMetaApi(ent.id, { method: 'DELETE', token });
+        console.log(`[Rollback] Deleted Meta entity ${ent.type} (${ent.id})`);
       } catch (cleanupErr: any) {
         console.error(`Rollback error for ${ent.type} (${ent.id}):`, cleanupErr.message);
+      }
+    }
+
+    // Explicitly ensure metaCampaignId is deleted so no empty campaigns are left behind (Requirement 4)
+    if (metaCampaignId) {
+      try {
+        console.log(`[Rollback] Ensuring campaign ${metaCampaignId} is deleted on Meta`);
+        await callMetaApi(metaCampaignId, { method: 'DELETE', token });
+        console.log(`[Rollback] Successfully deleted campaign ${metaCampaignId} on Meta`);
+      } catch (campErr: any) {
+        // Ignored if already deleted
       }
     }
 
@@ -3065,10 +3132,12 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
       error_user_msg: metaErr.error_user_msg,
     };
 
+    const cleanErrorMsg = metaErr.metaError?.error_user_msg || metaErr.metaError?.message || metaErr.message;
+
     return res.status(400).json({
       success: false,
       failedStep: currentStepName,
-      error: `Meta call failed at step [${currentStepName}]: ${metaErr.message}`,
+      error: `Meta call failed at step [${currentStepName}]: ${cleanErrorMsg}`,
       metaError: metaErrorObj,
       cleanedUp: true,
     });
@@ -3114,7 +3183,11 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
       maxAge: effectiveMaxAge,
       genders: effectiveGenders,
       placements: placements || ['facebook_feed', 'instagram_feed', 'stories_reels'],
+      geo_locations: geoLocations,
+      locationName: targetingLocationName,
     },
+    geo_locations: geoLocations,
+    targetingLocationName,
     metaAdSetId,
   };
 
@@ -3160,6 +3233,7 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
     thankYouPhone: thankYouPhone || '',
     formId: metaFormId,
     formName: goalType === 'LEAD_GEN' ? `${offerTitle} - Instant Lead Form` : undefined,
+    targetingLocationName,
     createdAt: new Date().toISOString(),
     // Real Meta IDs
     metaCampaignId,
@@ -3189,6 +3263,7 @@ app.post(['/api/campaigns/create', '/api/campaigns/wizard'], requireAdmin, async
     campaign: newCampaign,
     adSet: newAdSet,
     ad: newAd,
+    targetingLocationName,
     metaCampaignId,
     metaAdSetId,
     metaAdId,
@@ -3824,6 +3899,25 @@ app.get('/api/ads/:id', requireClientOrAdmin, async (req: Request, res: Response
     });
   }
 
+  // Read back targeting location name from Meta ad set (Requirement 3)
+  if (isLive && token && adSet?.metaAdSetId) {
+    try {
+      const adSetMeta = await callMetaApi(adSet.metaAdSetId, {
+        token,
+        params: { fields: 'id,name,targeting' }
+      });
+      if (adSetMeta.targeting) {
+        if (adSetMeta.targeting.geo_locations) {
+          adSet.targeting.geo_locations = adSetMeta.targeting.geo_locations;
+          adSet.geo_locations = adSetMeta.targeting.geo_locations;
+          adSet.targetingLocationName = formatLocationFromGeoLocations(adSetMeta.targeting.geo_locations);
+        }
+      }
+    } catch (adSetErr: any) {
+      console.warn(`[Ad Detail] Could not fetch targeting for ad set ${adSet.metaAdSetId}:`, adSetErr.message);
+    }
+  }
+
   res.json({
     ad,
     campaign,
@@ -3852,6 +3946,7 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
     endDate,
     city,
     radiusMiles,
+    selectedLocation,
     minAge,
     maxAge,
     placements,
@@ -3874,52 +3969,134 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
   const instagramId = client?.linkedMeta?.instagramId;
   const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
 
-  // 1. Update Ad Set targeting and budget if modified
+  // 1. Update Ad Set targeting and budget if modified (Requirement 2)
   if (adSet) {
     if (budget !== undefined) adSet.dailyBudget = Number(budget);
     if (startDate) adSet.startDate = startDate;
     if (endDate) adSet.endDate = endDate;
-    if (city || radiusMiles || minAge || maxAge || placements) {
+
+    const chosenLoc = selectedLocation;
+    const effectiveRadius = Number(radiusMiles) || adSet.targeting.radiusMiles || 15;
+
+    // Build chosen geo_locations: regions for a state, cities with radius for a city
+    const newGeoLocations: any = {};
+    if (chosenLoc) {
+      if (chosenLoc.type === 'region' || chosenLoc.type === 'state') {
+        const regKey = chosenLoc.key || (chosenLoc.name?.toLowerCase() === 'michigan' ? '3865' : '');
+        const sanitizedKey = (regKey === '3866' && chosenLoc.name?.toLowerCase() === 'michigan') ? '3865' : String(regKey);
+        newGeoLocations.regions = [{ key: sanitizedKey }];
+      } else if (chosenLoc.key && (chosenLoc.type === 'city' || !chosenLoc.latitude)) {
+        newGeoLocations.cities = [{
+          key: String(chosenLoc.key),
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      } else if (chosenLoc.latitude && chosenLoc.longitude) {
+        newGeoLocations.custom_locations = [{
+          latitude: Number(chosenLoc.latitude),
+          longitude: Number(chosenLoc.longitude),
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      } else if (chosenLoc.name) {
+        if (chosenLoc.name.toLowerCase() === 'michigan') {
+          newGeoLocations.regions = [{ key: '3865' }];
+        } else {
+          newGeoLocations.cities = [{
+            name: String(chosenLoc.name).trim(),
+            radius: effectiveRadius,
+            distance_unit: 'mile',
+          }];
+        }
+      }
+    } else if (city && String(city).trim()) {
+      if (String(city).trim().toLowerCase() === 'michigan') {
+        newGeoLocations.regions = [{ key: '3865' }];
+      } else {
+        newGeoLocations.cities = [{
+          name: String(city).trim(),
+          radius: effectiveRadius,
+          distance_unit: 'mile',
+        }];
+      }
+    }
+
+    if (city || radiusMiles || minAge || maxAge || placements || chosenLoc) {
       adSet.targeting = {
-        city: city || adSet.targeting.city,
-        radiusMiles: Number(radiusMiles) || adSet.targeting.radiusMiles,
+        city: chosenLoc?.name || city || adSet.targeting.city,
+        radiusMiles: effectiveRadius,
         minAge: Number(minAge) || adSet.targeting.minAge,
         maxAge: Number(maxAge) || adSet.targeting.maxAge,
         genders: adSet.targeting.genders,
         placements: placements || adSet.targeting.placements,
+        geo_locations: Object.keys(newGeoLocations).length > 0 ? newGeoLocations : adSet.targeting.geo_locations,
+        locationType: chosenLoc?.type,
+        locationKey: chosenLoc?.key,
+        locationName: chosenLoc?.name,
       };
+      if (Object.keys(newGeoLocations).length > 0) {
+        adSet.geo_locations = newGeoLocations;
+        adSet.targetingLocationName = formatLocationFromGeoLocations(newGeoLocations);
+      }
     }
 
     if (isLive && adSet.metaAdSetId) {
       try {
         const updatePayload: any = {};
         if (budget !== undefined) updatePayload.daily_budget = Math.round(Number(budget) * 100);
-        if (city || radiusMiles || minAge || maxAge) {
-          updatePayload.targeting = {
-            age_min: adSet.targeting.minAge,
-            age_max: adSet.targeting.maxAge,
-            geo_locations: {
-              cities: [
-                {
-                  name: adSet.targeting.city,
-                  radius: adSet.targeting.radiusMiles,
-                  distance_unit: 'mile',
-                }
-              ]
-            },
-            publisher_platforms: ['facebook', 'instagram'],
-            facebook_positions: ['feed', 'story'],
-            instagram_positions: ['stream', 'story', 'reels'],
-          };
+
+        // Fetch current targeting from Meta so age, placements, and advantage_audience are preserved
+        let currentTargeting: any = {};
+        try {
+          const currentMeta = await callMetaApi(adSet.metaAdSetId, {
+            token,
+            params: { fields: 'targeting' }
+          });
+          if (currentMeta.targeting) {
+            currentTargeting = currentMeta.targeting;
+          }
+        } catch (fetchErr: any) {
+          console.warn('[Edit AdSet] Could not fetch current targeting from Meta:', fetchErr.message);
         }
+
+        // Keep age, placements, and advantage_audience unchanged, and update geo_locations
+        const updatedTargeting: any = {
+          ...currentTargeting,
+        };
+
+        if (Object.keys(newGeoLocations).length > 0) {
+          updatedTargeting.geo_locations = newGeoLocations;
+        }
+
+        updatePayload.targeting = updatedTargeting;
+
         await callMetaApi(adSet.metaAdSetId, {
           method: 'POST',
           token,
           body: updatePayload,
         });
+
+        // Read back updated ad set from Meta to verify and cache
+        const refreshedMeta = await callMetaApi(adSet.metaAdSetId, {
+          token,
+          params: { fields: 'id,name,targeting' }
+        });
+        if (refreshedMeta.targeting?.geo_locations) {
+          adSet.targeting.geo_locations = refreshedMeta.targeting.geo_locations;
+          adSet.geo_locations = refreshedMeta.targeting.geo_locations;
+          adSet.targetingLocationName = formatLocationFromGeoLocations(refreshedMeta.targeting.geo_locations);
+        }
       } catch (err: any) {
         console.error('Meta AdSet update error:', err);
+        return res.status(400).json({
+          error: `Meta Error updating ad set targeting: ${err.message}`,
+          metaError: err.metaError || null
+        });
       }
+    }
+
+    if (firestoreDb) {
+      setDoc(doc(firestoreDb, 'adSets', adSet.id), adSet, { merge: true }).catch(() => {});
     }
   }
 

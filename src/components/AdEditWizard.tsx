@@ -12,9 +12,10 @@ import {
   Layers,
   ChevronRight,
   ChevronLeft,
-  Globe
+  Globe,
+  Search
 } from 'lucide-react';
-import { AdDetailData } from '../types';
+import { AdDetailData, GeoLocationSearchResult } from '../types';
 import { api } from '../services/api';
 
 interface AdEditWizardProps {
@@ -32,6 +33,7 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
 }) => {
   const [currentStep, setCurrentStep] = useState<number>(1);
   const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showLearningRestartWarning, setShowLearningRestartWarning] = useState(false);
 
   // Editable fields pre-filled from current ad settings
@@ -66,6 +68,88 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
   const [minAge, setMinAge] = useState(adSet?.targeting?.minAge || 25);
   const [maxAge, setMaxAge] = useState(adSet?.targeting?.maxAge || 65);
   const [startDate, setStartDate] = useState(adSet?.startDate || new Date().toISOString().split('T')[0]);
+
+  // Requirement 2: Pre-fill from the ad set's current targeting.geo_locations
+  const getInitialLocation = (): GeoLocationSearchResult | null => {
+    const geo = adSet?.targeting?.geo_locations || (adSet as any)?.geo_locations;
+    if (geo?.regions && geo.regions.length > 0) {
+      const reg = geo.regions[0];
+      const keyStr = String(reg.key || '3865');
+      const nameStr = reg.name || (keyStr === '3865' ? 'Michigan' : keyStr === '3866' ? 'Minnesota' : `Region #${keyStr}`);
+      return {
+        key: keyStr,
+        name: nameStr,
+        type: 'region',
+        country_code: reg.country_code || 'US',
+      };
+    }
+    if (geo?.cities && geo.cities.length > 0) {
+      const ct = geo.cities[0];
+      return {
+        key: String(ct.key || ''),
+        name: ct.name || adSet?.targeting?.city || 'City',
+        type: 'city',
+        country_code: ct.country_code || 'US',
+        region: ct.region,
+      };
+    }
+    if (adSet?.targeting?.locationKey) {
+      return {
+        key: adSet.targeting.locationKey,
+        name: adSet.targeting.locationName || adSet.targeting.city || 'Location',
+        type: (adSet.targeting.locationType as any) || 'region',
+        country_code: 'US',
+      };
+    }
+    if (adSet?.targetingLocationName) {
+      const isMich = adSet.targetingLocationName.toLowerCase().includes('michigan');
+      return {
+        key: isMich ? '3865' : '',
+        name: adSet.targetingLocationName,
+        type: isMich ? 'region' : 'city',
+        country_code: 'US',
+      };
+    }
+    if (adSet?.targeting?.city) {
+      const isMich = adSet.targeting.city.toLowerCase() === 'michigan';
+      return {
+        key: isMich ? '3865' : '',
+        name: adSet.targeting.city,
+        type: isMich ? 'region' : 'city',
+        country_code: 'US',
+      };
+    }
+    return null;
+  };
+
+  const [selectedLocation, setSelectedLocation] = useState<GeoLocationSearchResult | null>(getInitialLocation);
+  const [locationSearchInput, setLocationSearchInput] = useState('');
+  const [locationResults, setLocationResults] = useState<GeoLocationSearchResult[]>([]);
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
+
+  const handleSearchLocations = async (query: string) => {
+    setLocationSearchInput(query);
+    if (!query || query.trim().length < 2) {
+      setLocationResults([]);
+      return;
+    }
+    setIsSearchingLocation(true);
+    try {
+      const results = await api.searchLocations(query);
+      setLocationResults(results);
+    } catch (e) {
+      console.warn('Location search error in edit wizard:', e);
+    } finally {
+      setIsSearchingLocation(false);
+    }
+  };
+
+  const handleSelectLocationResult = (loc: GeoLocationSearchResult) => {
+    setSelectedLocation(loc);
+    setCity(loc.name);
+    setLocationSearchInput('');
+    setLocationResults([]);
+  };
 
   // Step 4: Lead Form Questions
   const [formQuestions, setFormQuestions] = useState<string>('Preferred day of week (e.g. Saturday morning)');
@@ -133,12 +217,22 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
 
   const executeSave = async () => {
     setIsSaving(true);
+    setSaveError(null);
     setShowLearningRestartWarning(false);
     try {
-      const payload = {
+      const payload: any = {
         budget: dailyBudget,
-        city,
+        city: selectedLocation?.name || city,
         radiusMiles: isSpecial ? Math.max(radiusMiles, 15) : radiusMiles,
+        selectedLocation: selectedLocation ? {
+          key: selectedLocation.key,
+          name: selectedLocation.name,
+          type: selectedLocation.type,
+          country_code: selectedLocation.country_code,
+          region: selectedLocation.region,
+          latitude: selectedLocation.latitude,
+          longitude: selectedLocation.longitude,
+        } : undefined,
         minAge: isSpecial ? 18 : minAge,
         maxAge: isSpecial ? 65 : maxAge,
         startDate,
@@ -158,7 +252,8 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
       onSuccess();
       onClose();
     } catch (err: any) {
-      alert(err.message || 'Failed to update ad');
+      console.error('Failed to update ad:', err);
+      setSaveError(err.message || 'Failed to update ad on Meta');
     } finally {
       setIsSaving(false);
     }
@@ -357,26 +452,107 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
                 <p className="text-slate-500 text-[11px]">Updates the existing Meta Ad Set immediately.</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">City</label>
-                  <input
-                    type="text"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    className="w-full border border-slate-300 rounded-lg p-2"
-                  />
+              {/* META AD GEOLOCATION TARGETING (Requirement 2) */}
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-900 uppercase">
+                    Meta Ad Geolocation Targeting
+                  </label>
+                  <span className="text-[10px] text-slate-500">Targeting Search API (search?type=adgeolocation)</span>
                 </div>
+
+                <div className="relative">
+                  <div className="flex items-center gap-2 bg-white border border-slate-300 rounded-lg px-3 py-2 focus-within:ring-2 focus-within:ring-amber-500/20">
+                    <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      value={locationSearchInput}
+                      onChange={(e) => handleSearchLocations(e.target.value)}
+                      placeholder="Search state (e.g. Michigan), city, or county..."
+                      className="w-full text-xs font-medium text-slate-800 bg-transparent outline-none"
+                    />
+                    {isSearchingLocation && (
+                      <RefreshCw className="w-3.5 h-3.5 text-amber-600 animate-spin shrink-0" />
+                    )}
+                  </div>
+
+                  {/* Search Autocomplete Results Dropdown */}
+                  {locationResults.length > 0 && (
+                    <div className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-300 rounded-lg shadow-xl max-h-48 overflow-y-auto">
+                      {locationResults.map((loc) => (
+                        <div
+                          key={`${loc.type}-${loc.key}`}
+                          onClick={() => handleSelectLocationResult(loc)}
+                          className="px-3 py-2 hover:bg-amber-50 cursor-pointer border-b border-slate-100 last:border-0 flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <span className="font-semibold text-slate-800">{loc.name}</span>
+                            <span className="text-slate-400 text-[11px] ml-1.5">
+                              {loc.region ? `${loc.region}, ` : ''}{loc.country_code}
+                            </span>
+                          </div>
+                          <span className="text-[10px] px-2 py-0.5 rounded uppercase font-semibold bg-slate-100 text-slate-600">
+                            {loc.type === 'region' ? 'State / Region' : loc.type}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Selected Location Pill */}
+                {selectedLocation ? (
+                  <div className="p-2.5 rounded-lg bg-emerald-50 border border-emerald-200 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <div>
+                        <span className="font-bold text-emerald-950">{selectedLocation.name}</span>
+                        <span className="text-emerald-700 text-[11px] ml-1.5">
+                          (Meta {selectedLocation.type.toUpperCase()} Key: #{selectedLocation.key})
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedLocation(null);
+                        setCity('');
+                      }}
+                      className="text-xs text-emerald-700 hover:text-emerald-900 font-semibold cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                ) : (city && city.trim()) ? (
+                  <div className="p-2.5 rounded-lg bg-emerald-50/60 border border-emerald-200 text-[11px] text-emerald-800 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Targeting area: <strong>{city}</strong></span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCity('')}
+                      className="text-[10px] text-emerald-700 hover:text-emerald-950 font-bold cursor-pointer"
+                    >
+                      Change
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* Radius Input (shown for cities/counties) */}
+              {selectedLocation?.type !== 'region' && (
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Radius (Miles)</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Service Area Radius (Miles)</label>
                   <input
                     type="number"
                     value={radiusMiles}
                     onChange={(e) => setRadiusMiles(Number(e.target.value))}
                     className="w-full border border-slate-300 rounded-lg p-2 font-bold"
                   />
+                  <span className="text-[10px] text-slate-500">Radius targeting applies to cities & custom coordinates</span>
                 </div>
-              </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -531,6 +707,16 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
             </div>
           )}
         </div>
+
+        {saveError && (
+          <div className="mx-6 mb-3 p-3 bg-red-50 rounded-xl border border-red-200 text-red-900 text-xs flex items-start gap-2 shadow-2xs">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold block text-red-950">Meta Update Error:</span>
+              <span className="font-mono text-[11px] text-red-900">{saveError}</span>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">

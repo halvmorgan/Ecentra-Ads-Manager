@@ -234,7 +234,7 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
         setMaxAge(65);
         setGenders('ALL');
         setSelectedLocation({
-          key: '3866',
+          key: '3865',
           name: 'Michigan',
           type: 'region',
           country_code: 'US',
@@ -525,8 +525,9 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
       onCampaignCreated();
     } catch (err: any) {
       console.error('Failed to launch campaign:', err);
-      setLaunchError(err.message || 'Meta ad creation failed. Check settings & ad account access.');
-      setFailedStep(err.failedStep || 'Meta Marketing API');
+      const metaMsg = err.metaError?.error_user_msg || err.metaError?.message || err.message || 'Meta ad creation failed. Check settings & ad account access.';
+      setLaunchError(metaMsg);
+      setFailedStep(err.failedStep || 'ad set');
       setMetaErrorDetails(err.metaError || null);
     } finally {
       setIsLaunching(false);
@@ -1716,6 +1717,23 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                     </div>
                   </div>
 
+                  {/* Requirement 3: Show "Targeting: <location name from Meta>" */}
+                  <div className="max-w-sm mx-auto mb-3.5 p-3 bg-amber-50/80 rounded-xl border border-amber-200/90 flex items-center justify-between gap-2 text-xs shadow-2xs">
+                    <div className="flex items-center gap-2">
+                      <MapPin className="w-4 h-4 text-amber-700 shrink-0" />
+                      <div>
+                        <span className="text-amber-800 font-medium text-[10px] block uppercase tracking-wider">Meta Geolocation Targeting</span>
+                        <span className="font-bold text-amber-950 text-xs">
+                          Targeting: {selectedLocation?.name || city || 'Michigan'}
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] px-2 py-0.5 rounded bg-amber-100 font-bold text-amber-900 border border-amber-200/80 shrink-0">
+                      {selectedLocation?.type === 'region' ? 'State' : selectedLocation?.type || 'Local'}
+                      {selectedLocation?.key ? ` #${selectedLocation.key}` : ''}
+                    </span>
+                  </div>
+
                   {/* Phone Mockup Frame */}
                   <div className="max-w-sm mx-auto bg-slate-900 rounded-[36px] p-3 shadow-2xl border-4 border-slate-800">
                     <div className="bg-white rounded-[28px] overflow-hidden shadow-inner text-slate-900 text-xs">
@@ -1952,6 +1970,14 @@ export const AdBuilderWizard: React.FC<AdBuilderWizardProps> = ({
                         <div className="flex justify-between items-center">
                           <span className="text-slate-500 font-medium">Meta Ad Account:</span>
                           <span className="font-mono font-semibold text-slate-800">act_{cleanActNum}</span>
+                        </div>
+
+                        {/* Requirement 3: Targeting read back from ad set after creation */}
+                        <div className="flex justify-between items-center bg-amber-50/90 p-2 rounded-lg border border-amber-200">
+                          <span className="text-amber-900 font-bold text-[11px]">Targeting:</span>
+                          <span className="font-bold text-amber-950 font-mono text-xs">
+                            {launchSuccessData?.targetingLocationName || launchSuccessData?.adSet?.targetingLocationName || selectedLocation?.name || 'Michigan'}
+                          </span>
                         </div>
 
                         <div className="flex justify-between items-start pt-1 border-t border-slate-100">

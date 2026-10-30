@@ -103,7 +103,10 @@ export interface AdSet {
     maxAge: number;
     genders: 'ALL' | 'MEN' | 'WOMEN';
     placements: string[]; // ['facebook_feed', 'instagram_feed', 'stories_reels']
+    geo_locations?: any;
   };
+  geo_locations?: any;
+  targetingLocationName?: string;
   metaAdSetId?: string;
 }
 
