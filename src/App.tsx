@@ -526,10 +526,14 @@ export default function App() {
             setAdDetailToEdit(null);
           }}
           adDetail={adDetailToEdit}
-          onSuccess={() => {
+          onSuccess={(targetingLoc?: string) => {
             setIsEditWizardOpen(false);
+            const editedAdId = adDetailToEdit.ad.id;
             setAdDetailToEdit(null);
-            showToast('Ad configuration updated successfully on Meta');
+            const targetText = targetingLoc ? `Targeting: ${targetingLoc}` : (adDetailToEdit?.adSet?.targetingLocationName ? `Targeting: ${adDetailToEdit.adSet.targetingLocationName}` : '');
+            showToast(targetText ? `Ad saved on Meta — ${targetText}` : 'Ad configuration updated successfully on Meta');
+            setSelectedAdDetailId(editedAdId);
+            setIsAdDetailOpen(true);
             loadAllData();
           }}
         />

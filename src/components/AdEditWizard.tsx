@@ -22,7 +22,7 @@ interface AdEditWizardProps {
   isOpen: boolean;
   onClose: () => void;
   adDetail: AdDetailData;
-  onSuccess: () => void;
+  onSuccess: (targetingLocation?: string) => void;
 }
 
 export const AdEditWizard: React.FC<AdEditWizardProps> = ({
@@ -156,13 +156,17 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
   const [privacyPolicyUrl, setPrivacyPolicyUrl] = useState(client?.websiteUrl ? `${client.websiteUrl}/privacy` : 'https://ecentraconcierge.com/privacy');
   const [thankYouPhone, setThankYouPhone] = useState(client?.phone || '');
 
-  // Check if creative content was changed (which triggers Meta review and learning restart)
+  // Check if creative content was changed (BUG 2: only if primary text, headline, description, CTA, website URL or image actually differ)
+  const isImageActuallyChanged = Boolean(imageUrl && imageUrl !== ad.imageUrl);
+  const isWebsiteUrlChanged = Boolean(websiteUrl && websiteUrl !== ((ad as any).websiteUrl || client?.websiteUrl || ''));
+
   const isCreativeModified = 
-    primaryText !== ad.primaryText ||
-    headline !== ad.headline ||
-    description !== ad.description ||
-    callToAction !== ad.callToAction ||
-    imageUrl !== ad.imageUrl;
+    (primaryText || '') !== (ad.primaryText || '') ||
+    (headline || '') !== (ad.headline || '') ||
+    (description || '') !== (ad.description || '') ||
+    (callToAction || '') !== (ad.callToAction || '') ||
+    isWebsiteUrlChanged ||
+    isImageActuallyChanged;
 
   const handleGenerateCopy = async () => {
     if (!client) return;
@@ -240,20 +244,41 @@ export const AdEditWizard: React.FC<AdEditWizardProps> = ({
         headline,
         description,
         callToAction,
-        imageUrl,
+        // BUG 1 (c): do not send a base64 image in the request body unless the user actually picked a new image
+        imageUrl: isImageActuallyChanged ? imageUrl : undefined,
         imageFormat,
-        websiteUrl: isTraffic ? websiteUrl : undefined,
+        websiteUrl: websiteUrl || (ad as any).websiteUrl || client?.websiteUrl || undefined,
         formQuestions: isTraffic ? [] : [formQuestions],
         privacyPolicyUrl,
         thankYouPhone,
       };
 
-      await api.editAd(ad.id, payload);
-      onSuccess();
+      const result = await api.editAd(ad.id, payload);
+
+      // BUG 1 (d): after any save re-fetch the ad set from Meta and show "Targeting: <location>"
+      let targetingLocation = result?.targetingLocationName || result?.adSet?.targetingLocationName;
+      try {
+        const fresh = await api.getAdDetail(ad.id);
+        if (fresh?.adSet?.targetingLocationName) {
+          targetingLocation = fresh.adSet.targetingLocationName;
+        }
+      } catch (refetchErr) {
+        console.warn('Could not re-fetch updated ad detail:', refetchErr);
+      }
+
+      onSuccess(targetingLocation);
       onClose();
     } catch (err: any) {
       console.error('Failed to update ad:', err);
-      setSaveError(err.message || 'Failed to update ad on Meta');
+      let errMsg = err.message || 'Failed to update ad on Meta';
+      if (
+        errMsg.includes('Unexpected token') ||
+        errMsg.includes('is not valid JSON') ||
+        errMsg.includes('JSON.parse')
+      ) {
+        errMsg = 'The server did not respond (status 503). Your change may still have been saved. Refresh to check.';
+      }
+      setSaveError(errMsg);
     } finally {
       setIsSaving(false);
     }

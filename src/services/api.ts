@@ -368,7 +368,13 @@ export const api = {
       headers,
       body: JSON.stringify(payload),
     });
-    const data = await res.json();
+    const text = await res.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error(`The server did not respond (status ${res.status || 'unknown'}). Your change may still have been saved. Refresh to check.`);
+    }
     if (!res.ok) throw new Error(data.error || 'Failed to update ad');
     return data;
   },

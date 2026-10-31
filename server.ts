@@ -3932,346 +3932,403 @@ app.get('/api/ads/:id', requireClientOrAdmin, async (req: Request, res: Response
 
 // EDIT AD FROM DASHBOARD (ADMIN PROTECTED - Requirement 2)
 app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const ad = store.ads.find(a => a.id === id);
-  if (!ad) return res.status(404).json({ error: 'Ad not found' });
+  try {
+    const { id } = req.params;
+    const ad = store.ads.find(a => a.id === id);
+    if (!ad) return res.status(404).json({ error: 'Ad not found' });
 
-  const client = await getClientFromDb(ad.clientId);
-  const adSet = store.adSets.find(as => as.id === ad.adSetId);
-  const campaign = store.campaigns.find(c => c.id === ad.campaignId);
+    const client = await getClientFromDb(ad.clientId);
+    const adSet = store.adSets.find(as => as.id === ad.adSetId);
+    const campaign = store.campaigns.find(c => c.id === ad.campaignId);
 
-  const {
-    budget,
-    startDate,
-    endDate,
-    city,
-    radiusMiles,
-    selectedLocation,
-    minAge,
-    maxAge,
-    placements,
-    primaryText,
-    headline,
-    description,
-    callToAction,
-    imageUrl,
-    imageFormat,
-    formQuestions,
-    privacyPolicyUrl,
-    thankYouPhone,
-    thankYouMessage,
-  } = req.body;
+    const {
+      budget,
+      startDate,
+      endDate,
+      city,
+      radiusMiles,
+      selectedLocation,
+      minAge,
+      maxAge,
+      placements,
+      primaryText,
+      headline,
+      description,
+      callToAction,
+      imageUrl,
+      imageFormat,
+      formQuestions,
+      privacyPolicyUrl,
+      thankYouPhone,
+      thankYouMessage,
+      websiteUrl,
+    } = req.body;
 
-  const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
-  const token = store.metaConfig.token;
-  const adAccountId = client?.linkedMeta?.adAccountId || 'act_40918820491';
-  const pageId = client?.linkedMeta?.pageId || 'page_991823019';
-  const instagramId = client?.linkedMeta?.instagramId;
-  const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
+    const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
+    const token = store.metaConfig.token;
+    const adAccountId = client?.linkedMeta?.adAccountId || 'act_40918820491';
+    const pageId = client?.linkedMeta?.pageId || 'page_991823019';
+    const instagramId = client?.linkedMeta?.instagramId;
+    const cleanAccountId = adAccountId.startsWith('act_') ? adAccountId : `act_${adAccountId}`;
 
-  // 1. Update Ad Set targeting and budget if modified (Requirement 2)
-  if (adSet) {
-    if (budget !== undefined) adSet.dailyBudget = Number(budget);
-    if (startDate) adSet.startDate = startDate;
-    if (endDate) adSet.endDate = endDate;
+    // 1. Update Ad Set targeting and budget if modified (Requirement 2)
+    if (adSet) {
+      if (budget !== undefined) adSet.dailyBudget = Number(budget);
+      if (startDate) adSet.startDate = startDate;
+      if (endDate) adSet.endDate = endDate;
 
-    const chosenLoc = selectedLocation;
-    const effectiveRadius = Number(radiusMiles) || adSet.targeting.radiusMiles || 15;
+      const chosenLoc = selectedLocation;
+      const effectiveRadius = Number(radiusMiles) || adSet.targeting.radiusMiles || 15;
 
-    // Build chosen geo_locations: regions for a state, cities with radius for a city
-    const newGeoLocations: any = {};
-    if (chosenLoc) {
-      if (chosenLoc.type === 'region' || chosenLoc.type === 'state') {
-        const regKey = chosenLoc.key || (chosenLoc.name?.toLowerCase() === 'michigan' ? '3865' : '');
-        const sanitizedKey = (regKey === '3866' && chosenLoc.name?.toLowerCase() === 'michigan') ? '3865' : String(regKey);
-        newGeoLocations.regions = [{ key: sanitizedKey }];
-      } else if (chosenLoc.key && (chosenLoc.type === 'city' || !chosenLoc.latitude)) {
-        newGeoLocations.cities = [{
-          key: String(chosenLoc.key),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      } else if (chosenLoc.latitude && chosenLoc.longitude) {
-        newGeoLocations.custom_locations = [{
-          latitude: Number(chosenLoc.latitude),
-          longitude: Number(chosenLoc.longitude),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      } else if (chosenLoc.name) {
-        if (chosenLoc.name.toLowerCase() === 'michigan') {
+      // Build chosen geo_locations: regions for a state, cities with radius for a city
+      const newGeoLocations: any = {};
+      if (chosenLoc) {
+        if (chosenLoc.type === 'region' || chosenLoc.type === 'state') {
+          const regKey = chosenLoc.key || (chosenLoc.name?.toLowerCase() === 'michigan' ? '3865' : '');
+          const sanitizedKey = (regKey === '3866' && chosenLoc.name?.toLowerCase() === 'michigan') ? '3865' : String(regKey);
+          newGeoLocations.regions = [{ key: sanitizedKey }];
+        } else if (chosenLoc.key && (chosenLoc.type === 'city' || !chosenLoc.latitude)) {
+          newGeoLocations.cities = [{
+            key: String(chosenLoc.key),
+            radius: effectiveRadius,
+            distance_unit: 'mile',
+          }];
+        } else if (chosenLoc.latitude && chosenLoc.longitude) {
+          newGeoLocations.custom_locations = [{
+            latitude: Number(chosenLoc.latitude),
+            longitude: Number(chosenLoc.longitude),
+            radius: effectiveRadius,
+            distance_unit: 'mile',
+          }];
+        } else if (chosenLoc.name) {
+          if (chosenLoc.name.toLowerCase() === 'michigan') {
+            newGeoLocations.regions = [{ key: '3865' }];
+          } else {
+            newGeoLocations.cities = [{
+              name: String(chosenLoc.name).trim(),
+              radius: effectiveRadius,
+              distance_unit: 'mile',
+            }];
+          }
+        }
+      } else if (city && String(city).trim()) {
+        if (String(city).trim().toLowerCase() === 'michigan') {
           newGeoLocations.regions = [{ key: '3865' }];
         } else {
           newGeoLocations.cities = [{
-            name: String(chosenLoc.name).trim(),
+            name: String(city).trim(),
             radius: effectiveRadius,
             distance_unit: 'mile',
           }];
         }
       }
-    } else if (city && String(city).trim()) {
-      if (String(city).trim().toLowerCase() === 'michigan') {
-        newGeoLocations.regions = [{ key: '3865' }];
-      } else {
-        newGeoLocations.cities = [{
-          name: String(city).trim(),
-          radius: effectiveRadius,
-          distance_unit: 'mile',
-        }];
-      }
-    }
 
-    if (city || radiusMiles || minAge || maxAge || placements || chosenLoc) {
-      adSet.targeting = {
-        city: chosenLoc?.name || city || adSet.targeting.city,
-        radiusMiles: effectiveRadius,
-        minAge: Number(minAge) || adSet.targeting.minAge,
-        maxAge: Number(maxAge) || adSet.targeting.maxAge,
-        genders: adSet.targeting.genders,
-        placements: placements || adSet.targeting.placements,
-        geo_locations: Object.keys(newGeoLocations).length > 0 ? newGeoLocations : adSet.targeting.geo_locations,
-        locationType: chosenLoc?.type,
-        locationKey: chosenLoc?.key,
-        locationName: chosenLoc?.name,
-      };
-      if (Object.keys(newGeoLocations).length > 0) {
-        adSet.geo_locations = newGeoLocations;
-        adSet.targetingLocationName = formatLocationFromGeoLocations(newGeoLocations);
-      }
-    }
-
-    if (isLive && adSet.metaAdSetId) {
-      try {
-        const updatePayload: any = {};
-        if (budget !== undefined) updatePayload.daily_budget = Math.round(Number(budget) * 100);
-
-        // Fetch current targeting from Meta so age, placements, and advantage_audience are preserved
-        let currentTargeting: any = {};
-        try {
-          const currentMeta = await callMetaApi(adSet.metaAdSetId, {
-            token,
-            params: { fields: 'targeting' }
-          });
-          if (currentMeta.targeting) {
-            currentTargeting = currentMeta.targeting;
-          }
-        } catch (fetchErr: any) {
-          console.warn('[Edit AdSet] Could not fetch current targeting from Meta:', fetchErr.message);
-        }
-
-        // Build the update targeting from a whitelist only, matching Meta API capabilities
-        // Copy only these fields from the current Meta targeting if present:
-        // age_min, age_max, genders, publisher_platforms, facebook_positions, instagram_positions,
-        // messenger_positions, audience_network_positions, device_platforms, and targeting_automation.advantage_audience
-        const updatedTargeting: any = {};
-
-        if (currentTargeting.age_min !== undefined) {
-          updatedTargeting.age_min = currentTargeting.age_min;
-        }
-        if (currentTargeting.age_max !== undefined) {
-          updatedTargeting.age_max = currentTargeting.age_max;
-        }
-        if (currentTargeting.genders !== undefined) {
-          updatedTargeting.genders = currentTargeting.genders;
-        }
-        if (currentTargeting.publisher_platforms !== undefined) {
-          updatedTargeting.publisher_platforms = currentTargeting.publisher_platforms;
-        }
-        if (currentTargeting.facebook_positions !== undefined) {
-          updatedTargeting.facebook_positions = currentTargeting.facebook_positions;
-        }
-        if (currentTargeting.instagram_positions !== undefined) {
-          updatedTargeting.instagram_positions = currentTargeting.instagram_positions;
-        }
-        if (currentTargeting.messenger_positions !== undefined) {
-          updatedTargeting.messenger_positions = currentTargeting.messenger_positions;
-        }
-        if (currentTargeting.audience_network_positions !== undefined) {
-          updatedTargeting.audience_network_positions = currentTargeting.audience_network_positions;
-        }
-        if (currentTargeting.device_platforms !== undefined) {
-          updatedTargeting.device_platforms = currentTargeting.device_platforms;
-        }
-
-        const advAudience = currentTargeting.targeting_automation?.advantage_audience !== undefined
-          ? currentTargeting.targeting_automation.advantage_audience
-          : currentTargeting.advantage_audience;
-        if (advAudience !== undefined) {
-          updatedTargeting.targeting_automation = { advantage_audience: advAudience };
-        }
-
-        // Set geo_locations to the newly chosen location. Do not send any other targeting fields.
+      if (city || radiusMiles || minAge || maxAge || placements || chosenLoc) {
+        adSet.targeting = {
+          city: chosenLoc?.name || city || adSet.targeting.city,
+          radiusMiles: effectiveRadius,
+          minAge: Number(minAge) || adSet.targeting.minAge,
+          maxAge: Number(maxAge) || adSet.targeting.maxAge,
+          genders: adSet.targeting.genders,
+          placements: placements || adSet.targeting.placements,
+          geo_locations: Object.keys(newGeoLocations).length > 0 ? newGeoLocations : adSet.targeting.geo_locations,
+          locationType: chosenLoc?.type,
+          locationKey: chosenLoc?.key,
+          locationName: chosenLoc?.name,
+        };
         if (Object.keys(newGeoLocations).length > 0) {
-          updatedTargeting.geo_locations = newGeoLocations;
-        } else if (currentTargeting.geo_locations) {
-          updatedTargeting.geo_locations = currentTargeting.geo_locations;
+          adSet.geo_locations = newGeoLocations;
+          adSet.targetingLocationName = formatLocationFromGeoLocations(newGeoLocations);
         }
+      }
 
-        updatePayload.targeting = updatedTargeting;
+      if (isLive && adSet.metaAdSetId) {
+        try {
+          const updatePayload: any = {};
+          if (budget !== undefined) updatePayload.daily_budget = Math.round(Number(budget) * 100);
 
-        await callMetaApi(adSet.metaAdSetId, {
-          method: 'POST',
-          token,
-          body: updatePayload,
-        });
-
-        // Read back updated ad set from Meta to verify and cache
-        const refreshedMeta = await callMetaApi(adSet.metaAdSetId, {
-          token,
-          params: { fields: 'id,name,targeting' }
-        });
-        if (refreshedMeta.targeting?.geo_locations) {
-          adSet.targeting.geo_locations = refreshedMeta.targeting.geo_locations;
-          adSet.geo_locations = refreshedMeta.targeting.geo_locations;
-          adSet.targetingLocationName = formatLocationFromGeoLocations(refreshedMeta.targeting.geo_locations);
-        }
-      } catch (err: any) {
-        console.error('Meta AdSet update error:', err);
-        const meta = err.metaError || {};
-        const metaCode = meta.code ?? err.code;
-        const metaSubcode = meta.error_subcode ?? err.error_subcode;
-        const metaUserMsg = meta.error_user_msg || meta.error_user_title || '';
-        const metaBaseMsg = meta.message || err.message || '';
-
-        const details: string[] = [];
-        if (metaCode !== undefined) details.push(`code: ${metaCode}`);
-        if (metaSubcode !== undefined) details.push(`error_subcode: ${metaSubcode}`);
-        if (metaUserMsg) details.push(`error_user_msg: "${metaUserMsg}"`);
-
-        const formattedError = `Meta Error updating ad set targeting: ${metaBaseMsg}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
-
-        return res.status(400).json({
-          error: formattedError,
-          metaError: {
-            message: metaBaseMsg,
-            code: metaCode,
-            error_subcode: metaSubcode,
-            error_user_msg: meta.error_user_msg,
-            error_user_title: meta.error_user_title,
-            ...meta,
+          // Fetch current targeting from Meta so age, placements, and advantage_audience are preserved
+          let currentTargeting: any = {};
+          try {
+            const currentMeta = await callMetaApi(adSet.metaAdSetId, {
+              token,
+              params: { fields: 'targeting' }
+            });
+            if (currentMeta.targeting) {
+              currentTargeting = currentMeta.targeting;
+            }
+          } catch (fetchErr: any) {
+            console.warn('[Edit AdSet] Could not fetch current targeting from Meta:', fetchErr.message);
           }
-        });
+
+          // Build the update targeting from a whitelist only, matching Meta API capabilities
+          // Copy only these fields from the current Meta targeting if present:
+          // age_min, age_max, genders, publisher_platforms, facebook_positions, instagram_positions,
+          // messenger_positions, audience_network_positions, device_platforms, and targeting_automation.advantage_audience
+          const updatedTargeting: any = {};
+
+          if (currentTargeting.age_min !== undefined) {
+            updatedTargeting.age_min = currentTargeting.age_min;
+          }
+          if (currentTargeting.age_max !== undefined) {
+            updatedTargeting.age_max = currentTargeting.age_max;
+          }
+          if (currentTargeting.genders !== undefined) {
+            updatedTargeting.genders = currentTargeting.genders;
+          }
+          if (currentTargeting.publisher_platforms !== undefined) {
+            updatedTargeting.publisher_platforms = currentTargeting.publisher_platforms;
+          }
+          if (currentTargeting.facebook_positions !== undefined) {
+            updatedTargeting.facebook_positions = currentTargeting.facebook_positions;
+          }
+          if (currentTargeting.instagram_positions !== undefined) {
+            updatedTargeting.instagram_positions = currentTargeting.instagram_positions;
+          }
+          if (currentTargeting.messenger_positions !== undefined) {
+            updatedTargeting.messenger_positions = currentTargeting.messenger_positions;
+          }
+          if (currentTargeting.audience_network_positions !== undefined) {
+            updatedTargeting.audience_network_positions = currentTargeting.audience_network_positions;
+          }
+          if (currentTargeting.device_platforms !== undefined) {
+            updatedTargeting.device_platforms = currentTargeting.device_platforms;
+          }
+
+          const advAudience = currentTargeting.targeting_automation?.advantage_audience !== undefined
+            ? currentTargeting.targeting_automation.advantage_audience
+            : currentTargeting.advantage_audience;
+          if (advAudience !== undefined) {
+            updatedTargeting.targeting_automation = { advantage_audience: advAudience };
+          }
+
+          // Set geo_locations to the newly chosen location. Do not send any other targeting fields.
+          if (Object.keys(newGeoLocations).length > 0) {
+            updatedTargeting.geo_locations = newGeoLocations;
+          } else if (currentTargeting.geo_locations) {
+            updatedTargeting.geo_locations = currentTargeting.geo_locations;
+          }
+
+          updatePayload.targeting = updatedTargeting;
+
+          await callMetaApi(adSet.metaAdSetId, {
+            method: 'POST',
+            token,
+            body: updatePayload,
+          });
+
+          // Read back updated ad set from Meta to verify and cache
+          const refreshedMeta = await callMetaApi(adSet.metaAdSetId, {
+            token,
+            params: { fields: 'id,name,targeting' }
+          });
+          if (refreshedMeta.targeting?.geo_locations) {
+            adSet.targeting.geo_locations = refreshedMeta.targeting.geo_locations;
+            adSet.geo_locations = refreshedMeta.targeting.geo_locations;
+            adSet.targetingLocationName = formatLocationFromGeoLocations(refreshedMeta.targeting.geo_locations);
+          }
+        } catch (err: any) {
+          console.error('Meta AdSet update error:', err);
+          const meta = err.metaError || {};
+          const metaCode = meta.code ?? err.code;
+          const metaSubcode = meta.error_subcode ?? err.error_subcode;
+          const metaUserMsg = meta.error_user_msg || meta.error_user_title || '';
+          const metaBaseMsg = meta.message || err.message || '';
+
+          const details: string[] = [];
+          if (metaCode !== undefined) details.push(`code: ${metaCode}`);
+          if (metaSubcode !== undefined) details.push(`error_subcode: ${metaSubcode}`);
+          if (metaUserMsg) details.push(`error_user_msg: "${metaUserMsg}"`);
+
+          const formattedError = `Meta Error updating ad set targeting: ${metaBaseMsg}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+
+          return res.status(400).json({
+            error: formattedError,
+            metaError: {
+              message: metaBaseMsg,
+              code: metaCode,
+              error_subcode: metaSubcode,
+              error_user_msg: meta.error_user_msg,
+              error_user_title: meta.error_user_title,
+              ...meta,
+            }
+          });
+        }
       }
     }
 
-    if (firestoreDb) {
-      setDoc(doc(firestoreDb, 'adSets', adSet.id), adSet, { merge: true }).catch(() => {});
-    }
-  }
+    // 2. Creative or Form Updates (BUG 2: only treat creative as changed if primary text, headline, description, CTA, website URL or image actually differ)
+    const hasTextDiff = (incoming: any, current: any) => {
+      if (incoming === undefined) return false;
+      return String(incoming).trim() !== String(current || '').trim();
+    };
 
-  // 2. Creative or Form Updates (Requirement: "create a new ad creative and point the ad to it")
-  const creativeChanged = 
-    (primaryText && primaryText !== ad.primaryText) ||
-    (headline && headline !== ad.headline) ||
-    (description && description !== ad.description) ||
-    (callToAction && callToAction !== ad.callToAction) ||
-    (imageUrl && imageUrl !== ad.imageUrl);
+    const isPrimaryTextChanged = hasTextDiff(primaryText, ad.primaryText);
+    const isHeadlineChanged = hasTextDiff(headline, ad.headline);
+    const isDescriptionChanged = hasTextDiff(description, ad.description);
+    const isCtaChanged = hasTextDiff(callToAction, ad.callToAction);
+    const isWebsiteUrlChanged = hasTextDiff(websiteUrl, ad.websiteUrl);
+    const isImageChanged = Boolean(imageUrl && imageUrl !== ad.imageUrl);
 
-  if (creativeChanged || formQuestions) {
-    let newFormId = ad.formId;
-    let newImageHash = ad.imageHash;
+    const creativeChanged = 
+      isPrimaryTextChanged ||
+      isHeadlineChanged ||
+      isDescriptionChanged ||
+      isCtaChanged ||
+      isWebsiteUrlChanged ||
+      isImageChanged;
 
-    if (isLive) {
-      try {
-        let imageFallbackUrl = '';
-        if (imageUrl && imageUrl !== ad.imageUrl) {
-          try {
-            newImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
-          } catch (imgErr: any) {
-            const metaCode = imgErr?.metaError?.code || imgErr?.code;
-            const metaMsg = (imgErr?.metaError?.message || imgErr?.message || '').toLowerCase();
-            if (metaCode === 3 || metaMsg.includes('(#3)') || metaMsg.includes('capability')) {
-              console.warn(`[Edit Ad] Error #3 on adimages upload. Falling back to picture URL: ${imageUrl}`);
-              newImageHash = '';
-              imageFallbackUrl = imageUrl;
-            } else {
-              throw imgErr;
+    if (creativeChanged) {
+      let newFormId = ad.formId;
+      let newImageHash = ad.imageHash;
+
+      // Determine if website/traffic ad vs lead form ad
+      const effectiveGoalType = req.body.goalType || ad.goalType;
+      const destinationUrl = (websiteUrl || ad.websiteUrl || client?.websiteUrl || '').trim();
+      const isWebsiteOrTrafficAd = effectiveGoalType === 'TRAFFIC_WEBSITE' || Boolean(destinationUrl);
+
+      if (isLive) {
+        try {
+          let imageFallbackUrl = '';
+          if (isImageChanged) {
+            try {
+              newImageHash = await uploadImageToMeta(cleanAccountId, imageUrl, token);
+            } catch (imgErr: any) {
+              const metaCode = imgErr?.metaError?.code || imgErr?.code;
+              const metaMsg = (imgErr?.metaError?.message || imgErr?.message || '').toLowerCase();
+              if (metaCode === 3 || metaMsg.includes('(#3)') || metaMsg.includes('capability')) {
+                console.warn(`[Edit Ad] Error #3 on adimages upload. Falling back to picture URL: ${imageUrl}`);
+                newImageHash = '';
+                imageFallbackUrl = imageUrl;
+              } else {
+                throw imgErr;
+              }
             }
           }
-        }
 
-        if (formQuestions) {
-          newFormId = await createMetaInstantForm(pageId, {
-            name: `${headline || ad.headline} Updated Form`,
-            privacyPolicyUrl: privacyPolicyUrl || client?.websiteUrl || 'https://ecentraconcierge.com/privacy',
-            thankYouPhone: thankYouPhone || client?.phone || '',
-            thankYouMessage: thankYouMessage || 'Thank you for reaching out.',
-          }, token);
-        }
+          if (!isWebsiteOrTrafficAd && formQuestions && Array.isArray(formQuestions) && formQuestions.length > 0) {
+            newFormId = await createMetaInstantForm(pageId, {
+              name: `${headline || ad.headline} Updated Form`,
+              privacyPolicyUrl: privacyPolicyUrl || client?.websiteUrl || 'https://ecentraconcierge.com/privacy',
+              thankYouPhone: thankYouPhone || client?.phone || '',
+              thankYouMessage: thankYouMessage || 'Thank you for reaching out.',
+            }, token);
+          }
 
-        // Create new creative
-        const linkData: any = {
-          message: primaryText || ad.primaryText,
-          name: headline || ad.headline,
-          description: description || ad.description,
-          call_to_action: {
-            type: callToAction || ad.callToAction,
-            value: { lead_gen_form_id: newFormId },
-          },
-        };
+          const effectiveCta = callToAction || ad.callToAction || (isWebsiteOrTrafficAd ? 'LEARN_MORE' : 'GET_QUOTE');
 
-        if (newImageHash) {
-          linkData.image_hash = newImageHash;
-        } else if (imageFallbackUrl || imageUrl || ad.imageUrl) {
-          linkData.picture = imageFallbackUrl || imageUrl || ad.imageUrl;
-        }
+          // Create new creative (BUG 2: link_data must include link, CTA must use link for website/traffic ads)
+          const linkData: any = {
+            message: primaryText || ad.primaryText,
+            name: headline || ad.headline,
+            description: description !== undefined ? description : (ad.description || ''),
+          };
 
-        const newCreativeRes = await callMetaApi(`${cleanAccountId}/adcreatives`, {
-          method: 'POST',
-          token,
-          body: {
-            name: `${headline || ad.headline} - Creative (Edited)`,
-            object_story_spec: {
-              page_id: pageId,
-              ...(instagramId ? { instagram_actor_id: instagramId } : {}),
-              link_data: linkData,
-            },
-          },
-        });
+          if (isWebsiteOrTrafficAd) {
+            const finalLink = destinationUrl || client?.websiteUrl || 'https://ecentraconcierge.com';
+            linkData.link = finalLink;
+            linkData.call_to_action = {
+              type: effectiveCta,
+              value: { link: finalLink },
+            };
+          } else {
+            const finalLink = destinationUrl || privacyPolicyUrl || client?.websiteUrl || 'https://ecentraconcierge.com';
+            linkData.link = finalLink;
+            linkData.call_to_action = {
+              type: effectiveCta,
+              value: { lead_gen_form_id: newFormId },
+            };
+          }
 
-        const newCreativeId = newCreativeRes.id;
+          if (newImageHash) {
+            linkData.image_hash = newImageHash;
+          } else if (imageFallbackUrl || imageUrl || ad.imageUrl) {
+            linkData.picture = imageFallbackUrl || imageUrl || ad.imageUrl;
+          }
 
-        // Point existing Ad to the new creative
-        if (ad.metaAdId) {
-          await callMetaApi(ad.metaAdId, {
+          const newCreativeRes = await callMetaApi(`${cleanAccountId}/adcreatives`, {
             method: 'POST',
             token,
             body: {
-              creative: { creative_id: newCreativeId },
-              // In Review state will be applied automatically by Meta
+              name: `${headline || ad.headline} - Creative (Edited)`,
+              object_story_spec: {
+                page_id: pageId,
+                ...(instagramId ? { instagram_actor_id: instagramId } : {}),
+                link_data: linkData,
+              },
             },
           });
-        }
 
-        ad.metaCreativeId = newCreativeId;
+          const newCreativeId = newCreativeRes.id;
+
+          // Point existing Ad to the new creative
+          if (ad.metaAdId) {
+            await callMetaApi(ad.metaAdId, {
+              method: 'POST',
+              token,
+              body: {
+                creative: { creative_id: newCreativeId },
+              },
+            });
+          }
+
+          ad.metaCreativeId = newCreativeId;
+          ad.status = 'IN_REVIEW';
+          ad.effectiveStatus = 'IN_PROCESS';
+        } catch (err: any) {
+          return res.status(400).json({ error: `Meta Error updating ad creative: ${err.message}` });
+        }
+      } else {
         ad.status = 'IN_REVIEW';
-        ad.effectiveStatus = 'IN_PROCESS';
-      } catch (err: any) {
-        return res.status(400).json({ error: `Meta Error updating ad creative: ${err.message}` });
+        ad.effectiveStatus = 'IN_REVIEW';
       }
-    } else {
-      ad.status = 'IN_REVIEW';
-      ad.effectiveStatus = 'IN_REVIEW';
+
+      if (primaryText) ad.primaryText = primaryText;
+      if (headline) ad.headline = headline;
+      if (description !== undefined) ad.description = description;
+      if (callToAction) ad.callToAction = callToAction;
+      if (destinationUrl) ad.websiteUrl = destinationUrl;
+      if (imageUrl) ad.imageUrl = imageUrl;
+      if (imageFormat) ad.imageFormat = imageFormat;
+      if (newFormId) ad.formId = newFormId;
     }
 
-    if (primaryText) ad.primaryText = primaryText;
-    if (headline) ad.headline = headline;
-    if (description !== undefined) ad.description = description;
-    if (callToAction) ad.callToAction = callToAction;
-    if (imageUrl) ad.imageUrl = imageUrl;
-    if (imageFormat) ad.imageFormat = imageFormat;
-    if (newFormId) ad.formId = newFormId;
-  }
+    // BUG 1 (b): Send success response right after Meta calls succeed
+    res.json({
+      success: true,
+      ad,
+      adSet,
+      targetingLocationName: adSet?.targetingLocationName,
+      message: creativeChanged 
+        ? 'Ad updated and resubmitted to Meta for review.'
+        : 'Ad Set settings and budget updated successfully.',
+    });
 
-  persist();
-  res.json({
-    success: true,
-    ad,
-    adSet,
-    message: creativeChanged 
-      ? 'Ad updated and resubmitted to Meta for review.'
-      : 'Ad Set settings and budget updated successfully.',
-  });
+    // Run persist() and Firestore writes in the background without blocking or throwing
+    Promise.resolve().then(async () => {
+      try {
+        if (firestoreDb) {
+          if (adSet) {
+            await setDoc(doc(firestoreDb, 'adSets', adSet.id), adSet, { merge: true }).catch(() => {});
+          }
+          if (ad) {
+            await setDoc(doc(firestoreDb, 'ads', ad.id), ad, { merge: true }).catch(() => {});
+          }
+        }
+        persist();
+      } catch (bgErr: any) {
+        console.warn('[Edit Ad Background Sync Warning]:', bgErr.message);
+      }
+    }).catch(err => {
+      console.warn('[Edit Ad Background Sync Rejection]:', err);
+    });
+
+  } catch (routeErr: any) {
+    console.error('Unhandled error in edit ad route:', routeErr);
+    return res.status(500).json({
+      error: routeErr.message || 'Internal server error while updating ad',
+    });
+  }
 });
 
 // Insights & Stats Calculation (Live or Cached, Tenant Isolated - Requirement 2)
