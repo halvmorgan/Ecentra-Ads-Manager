@@ -1519,8 +1519,8 @@ function formatLocationFromGeoLocations(geoLocations: any): string {
   return 'Michigan';
 }
 
-// Location Search via Meta Targeting Search API (ADMIN PROTECTED - Requirement 2 & 5)
-app.get('/api/meta/search-locations', requireAdmin, async (req: Request, res: Response) => {
+// Location Search via Meta Targeting Search API
+app.get('/api/meta/search-locations', requireClientOrAdmin, async (req: Request, res: Response) => {
   const query = (req.query.q as string || '').trim();
   if (!query) {
     return res.json({ locations: [] });
