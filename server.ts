@@ -4059,13 +4059,52 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
           console.warn('[Edit AdSet] Could not fetch current targeting from Meta:', fetchErr.message);
         }
 
-        // Keep age, placements, and advantage_audience unchanged, and update geo_locations
-        const updatedTargeting: any = {
-          ...currentTargeting,
-        };
+        // Build the update targeting from a whitelist only, matching Meta API capabilities
+        // Copy only these fields from the current Meta targeting if present:
+        // age_min, age_max, genders, publisher_platforms, facebook_positions, instagram_positions,
+        // messenger_positions, audience_network_positions, device_platforms, and targeting_automation.advantage_audience
+        const updatedTargeting: any = {};
 
+        if (currentTargeting.age_min !== undefined) {
+          updatedTargeting.age_min = currentTargeting.age_min;
+        }
+        if (currentTargeting.age_max !== undefined) {
+          updatedTargeting.age_max = currentTargeting.age_max;
+        }
+        if (currentTargeting.genders !== undefined) {
+          updatedTargeting.genders = currentTargeting.genders;
+        }
+        if (currentTargeting.publisher_platforms !== undefined) {
+          updatedTargeting.publisher_platforms = currentTargeting.publisher_platforms;
+        }
+        if (currentTargeting.facebook_positions !== undefined) {
+          updatedTargeting.facebook_positions = currentTargeting.facebook_positions;
+        }
+        if (currentTargeting.instagram_positions !== undefined) {
+          updatedTargeting.instagram_positions = currentTargeting.instagram_positions;
+        }
+        if (currentTargeting.messenger_positions !== undefined) {
+          updatedTargeting.messenger_positions = currentTargeting.messenger_positions;
+        }
+        if (currentTargeting.audience_network_positions !== undefined) {
+          updatedTargeting.audience_network_positions = currentTargeting.audience_network_positions;
+        }
+        if (currentTargeting.device_platforms !== undefined) {
+          updatedTargeting.device_platforms = currentTargeting.device_platforms;
+        }
+
+        const advAudience = currentTargeting.targeting_automation?.advantage_audience !== undefined
+          ? currentTargeting.targeting_automation.advantage_audience
+          : currentTargeting.advantage_audience;
+        if (advAudience !== undefined) {
+          updatedTargeting.targeting_automation = { advantage_audience: advAudience };
+        }
+
+        // Set geo_locations to the newly chosen location. Do not send any other targeting fields.
         if (Object.keys(newGeoLocations).length > 0) {
           updatedTargeting.geo_locations = newGeoLocations;
+        } else if (currentTargeting.geo_locations) {
+          updatedTargeting.geo_locations = currentTargeting.geo_locations;
         }
 
         updatePayload.targeting = updatedTargeting;
@@ -4088,9 +4127,29 @@ app.post(['/api/ads/:id/edit', '/api/ads/:id'], requireAdmin, async (req: Reques
         }
       } catch (err: any) {
         console.error('Meta AdSet update error:', err);
+        const meta = err.metaError || {};
+        const metaCode = meta.code ?? err.code;
+        const metaSubcode = meta.error_subcode ?? err.error_subcode;
+        const metaUserMsg = meta.error_user_msg || meta.error_user_title || '';
+        const metaBaseMsg = meta.message || err.message || '';
+
+        const details: string[] = [];
+        if (metaCode !== undefined) details.push(`code: ${metaCode}`);
+        if (metaSubcode !== undefined) details.push(`error_subcode: ${metaSubcode}`);
+        if (metaUserMsg) details.push(`error_user_msg: "${metaUserMsg}"`);
+
+        const formattedError = `Meta Error updating ad set targeting: ${metaBaseMsg}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+
         return res.status(400).json({
-          error: `Meta Error updating ad set targeting: ${err.message}`,
-          metaError: err.metaError || null
+          error: formattedError,
+          metaError: {
+            message: metaBaseMsg,
+            code: metaCode,
+            error_subcode: metaSubcode,
+            error_user_msg: meta.error_user_msg,
+            error_user_title: meta.error_user_title,
+            ...meta,
+          }
         });
       }
     }
