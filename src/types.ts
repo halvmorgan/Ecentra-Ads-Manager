@@ -154,6 +154,22 @@ export interface AdCreative {
   metaAdId?: string;
   createdAt: string;
   effectiveStatus?: string;
+  configuredStatus?: string;
+}
+
+export interface LeadDispatchLog {
+  id: string;
+  leadName: string;
+  formName: string;
+  formId?: string;
+  email?: string;
+  phone?: string;
+  receivedAt: string;
+  ghlSubAccountName?: string;
+  ghlLocationId?: string;
+  tag?: string;
+  status: 'success' | 'failed' | 'pending';
+  errorMessage?: string;
 }
 
 export interface InstantForm {
@@ -296,6 +312,7 @@ export interface AdStatItem {
   imageUrl: string;
   headline: string;
   effectiveStatus?: string;
+  configuredStatus?: string;
   metaAdId?: string;
   campaignId?: string;
   adSetId?: string;

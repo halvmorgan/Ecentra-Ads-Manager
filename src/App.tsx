@@ -150,15 +150,20 @@ export default function App() {
     }
   };
 
-  // Toggle Pause/Resume on Ad (Requirement 3: 3-level activation on Meta)
-  const handleToggleAdStatus = async (adId: string, currentStatus: AdStatus) => {
+  // Toggle Pause/Resume on Ad (Requirement 2: 3-level confirmation on Meta)
+  const handleToggleAdStatus = async (adId: string, currentStatus: AdStatus, configuredStatus?: string) => {
     try {
-      const nextStatus = currentStatus === 'ACTIVE' ? 'PAUSED' : 'ACTIVE';
+      const isCurrentlyActive = configuredStatus ? configuredStatus === 'ACTIVE' : currentStatus === 'ACTIVE';
+      const nextStatus = isCurrentlyActive ? 'PAUSED' : 'ACTIVE';
       const res = await api.toggleItemStatus(adId, 'ad', nextStatus);
-      if (nextStatus === 'ACTIVE' && res?.levels) {
-        showToast(`Meta Resumed (3 Levels ACTIVE) — Campaign: ${res.levels.campaign?.status || 'ACTIVE'}, Ad Set: ${res.levels.adSet?.status || 'ACTIVE'}, Ad: ${res.levels.ad?.status || 'ACTIVE'}`);
+      if (res?.levels) {
+        if (nextStatus === 'PAUSED') {
+          showToast(`Meta Confirmed Paused (3 Levels PAUSED) — Campaign: ${res.levels.campaign?.status || 'PAUSED'}, Ad Set: ${res.levels.adSet?.status || 'PAUSED'}, Ad: ${res.levels.ad?.status || 'PAUSED'}`);
+        } else {
+          showToast(`Meta Confirmed Active (3 Levels ACTIVE) — Campaign: ${res.levels.campaign?.status || 'ACTIVE'}, Ad Set: ${res.levels.adSet?.status || 'ACTIVE'}, Ad: ${res.levels.ad?.status || 'ACTIVE'}`);
+        }
       } else {
-        showToast(`Ad status updated to ${nextStatus}`);
+        showToast(res?.message || `Ad status updated to ${nextStatus}`);
       }
       await loadAllData();
     } catch (err: any) {
@@ -372,6 +377,7 @@ export default function App() {
                 onAdjustBudget={handleOpenBudgetModal}
                 onSelectAdDetail={handleSelectAdDetail}
                 onGoLive={handleGoLiveCampaign}
+                onRefreshData={loadAllData}
               />
             </div>
           )}
@@ -408,6 +414,7 @@ export default function App() {
                 onAdjustBudget={handleOpenBudgetModal}
                 onSelectAdDetail={handleSelectAdDetail}
                 onGoLive={handleGoLiveCampaign}
+                onRefreshData={loadAllData}
               />
             </div>
           )}

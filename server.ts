@@ -152,6 +152,7 @@ interface StoreData {
   adSets: any[];
   ads: any[];
   leads: any[];
+  leadDispatchLogs?: any[];
   insightsCache?: Record<string, any>;
 }
 
@@ -335,6 +336,7 @@ const defaultSeedData: StoreData = {
   adSets: [],
   ads: [],
   leads: [],
+  leadDispatchLogs: [],
 };
 
 let store: StoreData = {
@@ -345,6 +347,7 @@ let store: StoreData = {
   adSets: [],
   ads: [],
   leads: [],
+  leadDispatchLogs: [],
 };
 
 // Sync all collections to Cloud Firestore using firebase/firestore SDK
@@ -388,6 +391,13 @@ async function syncToFirestore(): Promise<void> {
     // 6. Leads (latest 200)
     for (const l of store.leads.slice(0, 200)) {
       batch.set(doc(firestoreDb, 'leads', l.id), l, { merge: true });
+    }
+
+    // 7. Lead Dispatch Logs (latest 100)
+    if (store.leadDispatchLogs && store.leadDispatchLogs.length > 0) {
+      for (const log of store.leadDispatchLogs.slice(0, 100)) {
+        batch.set(doc(firestoreDb, 'lead_dispatch_logs', log.id), log, { merge: true });
+      }
     }
 
     await batch.commit();
@@ -848,6 +858,20 @@ async function syncFromFirestore(): Promise<void> {
     });
     store.leads = leads;
 
+    // 7. Lead Dispatch Logs
+    try {
+      const logsSnap = await getDocs(collection(firestoreDb, 'lead_dispatch_logs'));
+      const logs: any[] = [];
+      logsSnap.forEach(d => {
+        const data = d.data();
+        if (data && data.id) logs.push(data);
+      });
+      logs.sort((a, b) => new Date(b.receivedAt).getTime() - new Date(a.receivedAt).getTime());
+      store.leadDispatchLogs = logs.slice(0, 100);
+    } catch (e: any) {
+      console.warn('[Firestore Logs Load Warning]:', e.message);
+    }
+
     // Ensure access codes for real non-own clients (own businesses never have codes)
     let needsResync = false;
     for (const c of store.clients) {
@@ -1260,14 +1284,17 @@ async function createMetaInstantForm(pageId: string, formConfig: {
   return res.id;
 }
 
-// Push Lead to GoHighLevel API
-async function syncLeadToGoHighLevel(client: any, lead: any, adName: string) {
-  if (!client.ghlConfig?.hasApiKey || !client.ghlConfig?.locationId) {
-    return { success: false, reason: 'GHL credentials not configured' };
-  }
+// Push Lead to GoHighLevel API with exact tag and sub-account routing (Requirement 3)
+async function syncLeadToGoHighLevel(client: any, lead: any, tag: string, formName?: string): Promise<{ success: boolean; contactId?: string; error?: string; reason?: string }> {
+  const ghlApiKey = client?.ghlConfig?.apiKey || serverGhlKeysMap[client?.id] || '';
+  const locationId = client?.ghlConfig?.locationId;
 
-  const ghlApiKey = client.ghlConfig.apiKey || '';
-  const locationId = client.ghlConfig.locationId;
+  if (!ghlApiKey || !locationId) {
+    return {
+      success: false,
+      reason: `GHL credentials not configured for sub-account "${client?.businessName || 'Default'}" (missing Location ID or API Key in Client Setup)`,
+    };
+  }
 
   try {
     const contactPayload = {
@@ -1275,8 +1302,8 @@ async function syncLeadToGoHighLevel(client: any, lead: any, adName: string) {
       phone: lead.phone,
       email: lead.email,
       locationId: locationId,
-      tags: [`FB Ad – ${adName}`],
-      source: `Meta Lead Form – ${adName}`,
+      tags: [tag],
+      source: `Meta Lead Form – ${formName || tag}`,
     };
 
     const ghlRes = await fetch('https://services.leadconnectorhq.com/contacts/', {
@@ -1290,78 +1317,285 @@ async function syncLeadToGoHighLevel(client: any, lead: any, adName: string) {
     });
 
     const ghlData: any = await ghlRes.json();
+    if (!ghlRes.ok) {
+      const errMsg = ghlData?.message || ghlData?.error || `GoHighLevel API returned HTTP ${ghlRes.status}`;
+      return { success: false, error: errMsg };
+    }
+
     return {
-      success: ghlRes.ok,
+      success: true,
       contactId: ghlData?.contact?.id || ghlData?.id || `ghl_cnt_${Date.now()}`,
     };
   } catch (err: any) {
     console.error('GHL sync error:', err);
-    return { success: false, error: err.message };
+    return { success: false, error: err.message || 'GoHighLevel network error' };
   }
 }
 
-// Background Lead Sync (every 15 minutes)
-async function syncAllLiveLeads() {
-  if (!store.metaConfig.liveMode || !store.metaConfig.token) return;
+// Known Live Lead Forms for Ecentury AI / Ecentra Concierge (Requirement 3)
+const KNOWN_META_LEAD_FORMS = [
+  {
+    formId: '1111136241824188',
+    formName: 'HVW Zillow Checklist Form',
+    pageId: '959992543870563',
+    pageName: 'Ecentury Appraisal Services',
+    subAccountName: 'Ecentury Appraisal Services',
+    clientIdentifiers: ['client-the-home-value-worksheet', 'client-ecentury-appraisal', '959992543870563'],
+    tag: 'hvw checklist',
+  },
+  {
+    formId: '1574634711099580',
+    formName: 'AFC Licensing Checklist Form',
+    pageId: '1343797685494176',
+    pageName: 'Michigan AFC Playbook',
+    subAccountName: 'Ecentra Concierge',
+    clientIdentifiers: ['client-1793387134019', 'client-ecentra-concierge', '1343797685494176'],
+    tag: 'afc checklist',
+  },
+  {
+    formId: '1872920157034934',
+    formName: 'LLC Setup Checklist Form',
+    pageId: '1434508929743085',
+    pageName: 'LLC to Credit',
+    subAccountName: 'Ecentra Concierge',
+    clientIdentifiers: ['client-1793277535626', 'client-ecentra-concierge', '1434508929743085'],
+    tag: 'llc checklist',
+  },
+  {
+    formId: '2021054135269484',
+    formName: 'LLC 5 Mistakes Form',
+    pageId: '1434508929743085',
+    pageName: 'LLC to Credit',
+    subAccountName: 'Ecentra Concierge',
+    clientIdentifiers: ['client-1793277535626', 'client-ecentra-concierge', '1434508929743085'],
+    tag: 'llc 5 mistakes',
+  },
+];
 
+// Background Lead Sync (every 15 minutes or via Sync Leads Now button)
+async function syncAllLiveLeads(): Promise<{
+  syncedCount: number;
+  duplicateCount: number;
+  errors: string[];
+  logs: any[];
+}> {
+  if (!store.metaConfig.liveMode || !store.metaConfig.token) {
+    return {
+      syncedCount: 0,
+      duplicateCount: 0,
+      errors: ['Meta is not in Live Mode or token is missing.'],
+      logs: store.leadDispatchLogs || [],
+    };
+  }
+
+  const token = store.metaConfig.token;
   const clients = await getClientsFromDb();
-  for (const client of clients) {
-    const clientAds = store.ads.filter(a => a.clientId === client.id && a.formId);
-    for (const ad of clientAds) {
-      if (!ad.formId) continue;
-      try {
-        const leadsRes = await callMetaApi(`${ad.formId}/leads?fields=id,created_time,field_data`, {
-          token: store.metaConfig.token,
-        });
+  let syncedCount = 0;
+  let duplicateCount = 0;
+  const errors: string[] = [];
+  store.leadDispatchLogs = store.leadDispatchLogs || [];
 
-        if (leadsRes.data && Array.isArray(leadsRes.data)) {
-          for (const item of leadsRes.data) {
-            const exists = store.leads.some(l => l.metaLeadId === item.id);
-            if (!exists) {
-              let fullName = 'Meta Lead';
-              let phone = '';
-              let email = '';
-              const customAnswers: Record<string, string> = {};
+  // 1. Gather all forms to check: known lead forms + any formIds on existing ads
+  const formsToCheck: Array<{
+    formId: string;
+    formName: string;
+    pageId?: string;
+    pageName?: string;
+    subAccountName: string;
+    tag: string;
+    clientId?: string;
+    adId?: string;
+    adName?: string;
+  }> = [...KNOWN_META_LEAD_FORMS];
 
-              (item.field_data || []).forEach((field: any) => {
-                const name = field.name?.toLowerCase() || '';
-                const val = (field.values && field.values[0]) || '';
-                if (name.includes('name')) fullName = val;
-                else if (name.includes('phone')) phone = val;
-                else if (name.includes('email')) email = val;
-                else customAnswers[field.name] = val;
-              });
-
-              // Push to GHL
-              const ghlResult = await syncLeadToGoHighLevel(client, { fullName, phone, email }, ad.name);
-
-              const newRecord = {
-                id: `lead-${Date.now()}-${item.id}`,
-                clientId: client.id,
-                adId: ad.id,
-                adName: ad.name,
-                campaignName: store.campaigns.find(c => c.id === ad.campaignId)?.name || 'Campaign',
-                fullName,
-                phone,
-                email,
-                submittedAt: item.created_time || new Date().toISOString(),
-                ghlContactId: ghlResult.contactId || `ghl_sync_${Date.now()}`,
-                ghlSyncStatus: ghlResult.success ? 'synced' : 'pending',
-                customAnswers,
-                alertSent: true,
-                metaLeadId: item.id,
-              };
-
-              store.leads.unshift(newRecord);
-              persist();
-            }
-          }
-        }
-      } catch (err: any) {
-        // Form might not have leads yet
-      }
+  for (const ad of store.ads) {
+    if (ad.formId && !formsToCheck.some(f => f.formId === ad.formId)) {
+      const client = clients.find(c => c.id === ad.clientId);
+      formsToCheck.push({
+        formId: ad.formId,
+        formName: ad.formName || `Lead Form for ${ad.name}`,
+        subAccountName: client?.businessName || 'Ecentra Concierge',
+        tag: `FB Ad – ${ad.name}`,
+        clientId: ad.clientId,
+        adId: ad.id,
+        adName: ad.name,
+      });
     }
   }
+
+  // 2. Fetch page tokens from /me/accounts if available
+  const pageTokensMap = new Map<string, string>();
+  try {
+    const pagesRes = await callMetaApi('me/accounts?fields=id,name,access_token', { token });
+    if (pagesRes.data && Array.isArray(pagesRes.data)) {
+      for (const p of pagesRes.data) {
+        if (p.id && p.access_token) {
+          pageTokensMap.set(p.id, p.access_token);
+        }
+      }
+    }
+  } catch (pe: any) {
+    console.warn('[Page Tokens Fetch Warning]:', pe.message);
+  }
+
+  const thirtyDaysAgoSec = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+
+  // 3. Query leads from each lead form
+  for (const formItem of formsToCheck) {
+    // Resolve client sub-account
+    let targetClient = clients.find(c =>
+      (formItem.clientId && c.id === formItem.clientId) ||
+      (formItem as any).clientIdentifiers?.includes(c.id) ||
+      (formItem.pageId && c.linkedMeta?.pageId === formItem.pageId) ||
+      c.businessName?.toLowerCase() === formItem.subAccountName.toLowerCase()
+    );
+    if (!targetClient) {
+      targetClient = clients.find(c => c.businessName?.toLowerCase().includes('concierge')) || clients[0];
+    }
+
+    const preferredToken = (formItem.pageId && pageTokensMap.get(formItem.pageId)) || token;
+    let leadItems: any[] = [];
+    let metaFetchError: string | null = null;
+
+    try {
+      const leadsRes = await callMetaApi(`${formItem.formId}/leads?fields=id,created_time,field_data`, {
+        token: preferredToken,
+        params: {
+          filtering: JSON.stringify([
+            { field: 'time_created', operator: 'GREATER_THAN', value: thirtyDaysAgoSec }
+          ]),
+        },
+      });
+      leadItems = leadsRes.data || [];
+    } catch (err1: any) {
+      try {
+        const leadsRes2 = await callMetaApi(`${formItem.formId}/leads?fields=id,created_time,field_data`, {
+          token,
+        });
+        leadItems = (leadsRes2.data || []).filter((item: any) => {
+          if (!item.created_time) return true;
+          const t = new Date(item.created_time).getTime() / 1000;
+          return t >= thirtyDaysAgoSec;
+        });
+      } catch (err2: any) {
+        metaFetchError = err2.message || err1.message || 'Failed to read leads from Meta';
+        errors.push(`${formItem.formName}: ${metaFetchError}`);
+      }
+    }
+
+    if (metaFetchError) {
+      // Record failed sync attempt in logs for user transparency
+      const logEntry = {
+        id: `log-${Date.now()}-${formItem.formId}`,
+        leadName: 'N/A (Form Sync)',
+        formName: formItem.formName,
+        formId: formItem.formId,
+        receivedAt: new Date().toISOString(),
+        ghlSubAccountName: formItem.subAccountName,
+        tag: formItem.tag,
+        status: 'failed',
+        errorMessage: `Meta Error: ${metaFetchError}`,
+      };
+      // Keep only one sync failure per form to avoid log spam
+      store.leadDispatchLogs = store.leadDispatchLogs.filter(l => !(l.formId === formItem.formId && l.leadName.startsWith('N/A')));
+      store.leadDispatchLogs.unshift(logEntry);
+      continue;
+    }
+
+    // Process fetched leads
+    for (const item of leadItems) {
+      let fullName = 'Meta Lead';
+      let phone = '';
+      let email = '';
+      const customAnswers: Record<string, string> = {};
+
+      (item.field_data || []).forEach((field: any) => {
+        const name = (field.name || '').toLowerCase();
+        const val = (field.values && field.values[0]) || '';
+        if (name.includes('full_name') || name === 'name') fullName = val;
+        else if (name.includes('phone')) phone = val;
+        else if (name.includes('email')) email = val;
+        else if (val) customAnswers[field.name || name] = val;
+      });
+
+      // Match on email to prevent duplicate contacts in GoHighLevel
+      const isDuplicate = Boolean(
+        email && store.leads.some(l => l.email && l.email.toLowerCase() === email.toLowerCase())
+      ) || store.leads.some(l => l.metaLeadId === item.id);
+
+      if (isDuplicate) {
+        duplicateCount++;
+        const existingRecord = store.leads.find(l => (email && l.email?.toLowerCase() === email.toLowerCase()) || l.metaLeadId === item.id);
+        const logEntry = {
+          id: `log-${Date.now()}-${item.id}`,
+          leadName: fullName,
+          formName: formItem.formName,
+          formId: formItem.formId,
+          email,
+          phone,
+          receivedAt: item.created_time || new Date().toISOString(),
+          ghlSubAccountName: formItem.subAccountName,
+          tag: formItem.tag,
+          status: 'success',
+          errorMessage: existingRecord?.ghlContactId ? `Already synced to GHL (${existingRecord.ghlContactId}) - duplicate skipped` : 'Duplicate email skipped',
+        };
+        // Avoid duplicate log entries for the same lead
+        if (!store.leadDispatchLogs.some(l => l.formId === formItem.formId && l.email === email)) {
+          store.leadDispatchLogs.unshift(logEntry);
+        }
+        continue;
+      }
+
+      // New lead: Dispatch to GoHighLevel
+      const ghlRes = await syncLeadToGoHighLevel(targetClient, { fullName, phone, email }, formItem.tag, formItem.formName);
+
+      const newRecord = {
+        id: `lead-${Date.now()}-${item.id}`,
+        clientId: targetClient.id,
+        adId: formItem.adId || (store.ads.find(a => a.formId === formItem.formId)?.id || 'ad-lead'),
+        adName: formItem.adName || formItem.formName,
+        campaignName: store.campaigns.find(c => c.id === targetClient.id)?.name || formItem.formName,
+        fullName,
+        phone,
+        email,
+        submittedAt: item.created_time || new Date().toISOString(),
+        ghlContactId: ghlRes.contactId || (ghlRes.success ? `ghl_sync_${Date.now()}` : undefined),
+        ghlSyncStatus: ghlRes.success ? 'synced' : 'pending',
+        customAnswers,
+        alertSent: ghlRes.success,
+        metaLeadId: item.id,
+      };
+
+      store.leads.unshift(newRecord);
+      syncedCount++;
+
+      const logEntry = {
+        id: `log-${Date.now()}-${item.id}`,
+        leadName: fullName,
+        formName: formItem.formName,
+        formId: formItem.formId,
+        email,
+        phone,
+        receivedAt: item.created_time || new Date().toISOString(),
+        ghlSubAccountName: formItem.subAccountName,
+        tag: formItem.tag,
+        status: ghlRes.success ? 'success' : 'failed',
+        errorMessage: ghlRes.success ? undefined : (ghlRes.error || ghlRes.reason || 'Failed to dispatch to GoHighLevel'),
+      };
+      store.leadDispatchLogs.unshift(logEntry);
+    }
+  }
+
+  // Keep latest 100 dispatch logs
+  store.leadDispatchLogs = store.leadDispatchLogs.slice(0, 100);
+  persist();
+
+  return {
+    syncedCount,
+    duplicateCount,
+    errors,
+    logs: store.leadDispatchLogs,
+  };
 }
 
 // Run 15-minute sync interval
@@ -1370,6 +1604,48 @@ setInterval(syncAllLiveLeads, 15 * 60 * 1000);
 // ==========================================
 // API ROUTES
 // ==========================================
+
+// Meta Webhook Verification (Requirement 3)
+app.get(['/api/webhook/meta', '/api/webhooks/meta'], (req: Request, res: Response) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
+
+  if (mode === 'subscribe' && (token === 'ecentra_ads_webhook_2026' || token === 'ecentra_webhook_token_2026' || !token)) {
+    console.log('[Meta Webhook] Successfully verified webhook subscription');
+    return res.status(200).send(challenge);
+  }
+  return res.status(403).send('Verification failed');
+});
+
+// Meta Webhook Event Handler (Requirement 3)
+app.post(['/api/webhook/meta', '/api/webhooks/meta'], async (req: Request, res: Response) => {
+  res.status(200).send('EVENT_RECEIVED');
+  try {
+    const body = req.body;
+    if (body.object === 'page' && Array.isArray(body.entry)) {
+      for (const entry of body.entry) {
+        if (Array.isArray(entry.changes)) {
+          for (const change of entry.changes) {
+            if (change.field === 'leadgen' && change.value) {
+              const { form_id, leadgen_id } = change.value;
+              console.log(`[Meta Webhook] Leadgen event received: form=${form_id}, leadgen_id=${leadgen_id}`);
+              // Trigger sync to fetch this lead immediately
+              await syncAllLiveLeads();
+            }
+          }
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Meta Webhook Handler Warning]:', err.message);
+  }
+});
+
+// Lead Dispatch Logs for Leads & GHL page (Requirement 3)
+app.get('/api/leads/logs', requireClientOrAdmin, (req: Request, res: Response) => {
+  return res.json(store.leadDispatchLogs || []);
+});
 
 // Server & Database Status (reports isDbPermanent true ONLY when a real Firestore write and read just succeeded)
 app.get('/api/status', async (req: Request, res: Response) => {
@@ -3397,7 +3673,7 @@ app.post('/api/campaigns/:id/golive', requireAdmin, async (req: Request, res: Re
   });
 });
 
-// Toggle Pause / Resume on Campaign, AdSet, or Ad (ADMIN PROTECTED - Requirement 2 & 3)
+// Toggle Pause / Resume on Campaign, AdSet, or Ad (Requirement 2: 3-level Pause/Resume on Meta)
 app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, async (req: Request, res: Response) => {
   const targetId = req.params.id || req.body.id;
   const { type, newStatus, status } = req.body; // type: 'campaign' | 'ad' | 'adset' | 'adSet'
@@ -3411,7 +3687,10 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
 
     const ad = store.ads.find(a => a.id === targetId || a.metaAdId === targetId);
     if (!ad) return res.status(404).json({ error: 'Ad not found' });
-    const targetStatus = desiredStatus || (ad.status === 'ACTIVE' ? 'PAUSED' : 'ACTIVE');
+    
+    // Choose desired target status based on configured status if available
+    const isCurrentlyActive = ad.configuredStatus ? ad.configuredStatus === 'ACTIVE' : ad.status === 'ACTIVE';
+    const targetStatus: 'PAUSED' | 'ACTIVE' = desiredStatus || (isCurrentlyActive ? 'PAUSED' : 'ACTIVE');
 
     let campStatusResult: any = null;
     let adSetStatusResult: any = null;
@@ -3419,28 +3698,69 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
 
     if (token && ad.metaAdId && !ad.metaAdId.startsWith('meta_ad_')) {
       try {
-        // If resuming ad on Meta (ACTIVE), activate all three levels (Campaign, Ad Set, Ad) per Requirement 3
-        if (targetStatus === 'ACTIVE') {
-          // 1. Activate Campaign on Meta
-          const campaign = store.campaigns.find(c => c.id === ad.campaignId || c.metaCampaignId === ad.metaCampaignId);
-          if (campaign && campaign.metaCampaignId && !campaign.metaCampaignId.startsWith('meta_camp_')) {
-            await callMetaApi(campaign.metaCampaignId, { method: 'POST', token, body: { status: 'ACTIVE' } });
-            const campMeta = await callMetaApi(campaign.metaCampaignId, { token, params: { fields: 'id,name,status,effective_status' } });
-            campaign.status = campMeta.status || 'ACTIVE';
-            campaign.effectiveStatus = campMeta.effective_status || 'ACTIVE';
-            campStatusResult = { id: campaign.metaCampaignId, status: campaign.status, effectiveStatus: campaign.effectiveStatus };
-            if (firestoreDb) await setDoc(doc(firestoreDb, 'campaigns', campaign.id), campaign, { merge: true });
-          }
+        // Resolve Meta Campaign and Ad Set IDs
+        let metaCampaignId = ad.metaCampaignId;
+        let metaAdSetId = ad.metaAdSetId;
+        try {
+          const preMeta = await callMetaApi(ad.metaAdId, {
+            token,
+            params: { fields: 'id,campaign_id,adset_id,status,configured_status,effective_status' }
+          });
+          if (preMeta.campaign_id) metaCampaignId = preMeta.campaign_id;
+          if (preMeta.adset_id) metaAdSetId = preMeta.adset_id;
+        } catch (pe: any) {
+          console.warn('[Pre-fetch ad metadata warning]:', pe.message);
+        }
 
-          // 2. Activate Ad Set on Meta
-          const adSet = store.adSets.find(as => as.id === ad.adSetId || as.metaAdSetId === ad.metaAdSetId);
-          if (adSet && adSet.metaAdSetId && !adSet.metaAdSetId.startsWith('meta_adset_')) {
-            await callMetaApi(adSet.metaAdSetId, { method: 'POST', token, body: { status: 'ACTIVE' } });
-            const asMeta = await callMetaApi(adSet.metaAdSetId, { token, params: { fields: 'id,name,status,effective_status' } });
-            adSet.status = asMeta.status || 'ACTIVE';
-            adSet.effectiveStatus = asMeta.effective_status || 'ACTIVE';
-            adSetStatusResult = { id: adSet.metaAdSetId, status: adSet.status, effectiveStatus: adSet.effectiveStatus };
-            if (firestoreDb) await setDoc(doc(firestoreDb, 'adSets', adSet.id), adSet, { merge: true });
+        // PROBLEM 2: "When I click Pause, send status=PAUSED to Meta for the ad, its ad set AND its campaign (POST /{id} with status=PAUSED for each). Play should set all three back to ACTIVE."
+        
+        // 1. Update Campaign on Meta
+        if (metaCampaignId && !metaCampaignId.startsWith('meta_camp_')) {
+          await callMetaApi(metaCampaignId, {
+            method: 'POST',
+            token,
+            body: { status: targetStatus },
+          });
+          const campMeta = await callMetaApi(metaCampaignId, {
+            token,
+            params: { fields: 'id,name,status,configured_status,effective_status' }
+          });
+          campStatusResult = {
+            id: metaCampaignId,
+            status: campMeta.status,
+            configuredStatus: campMeta.configured_status,
+            effectiveStatus: campMeta.effective_status,
+          };
+          const matchedCamp = store.campaigns.find(c => c.id === ad.campaignId || c.metaCampaignId === metaCampaignId);
+          if (matchedCamp) {
+            matchedCamp.status = campMeta.status || targetStatus;
+            matchedCamp.effectiveStatus = campMeta.effective_status || targetStatus;
+            if (firestoreDb) setDoc(doc(firestoreDb, 'campaigns', matchedCamp.id), matchedCamp, { merge: true }).catch(() => {});
+          }
+        }
+
+        // 2. Update Ad Set on Meta
+        if (metaAdSetId && !metaAdSetId.startsWith('meta_adset_')) {
+          await callMetaApi(metaAdSetId, {
+            method: 'POST',
+            token,
+            body: { status: targetStatus },
+          });
+          const asMeta = await callMetaApi(metaAdSetId, {
+            token,
+            params: { fields: 'id,name,status,configured_status,effective_status' }
+          });
+          adSetStatusResult = {
+            id: metaAdSetId,
+            status: asMeta.status,
+            configuredStatus: asMeta.configured_status,
+            effectiveStatus: asMeta.effective_status,
+          };
+          const matchedAdSet = store.adSets.find(as => as.id === ad.adSetId || as.metaAdSetId === metaAdSetId);
+          if (matchedAdSet) {
+            matchedAdSet.status = asMeta.status || targetStatus;
+            matchedAdSet.effectiveStatus = asMeta.effective_status || targetStatus;
+            if (firestoreDb) setDoc(doc(firestoreDb, 'adSets', matchedAdSet.id), matchedAdSet, { merge: true }).catch(() => {});
           }
         }
 
@@ -3450,17 +3770,45 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
           token,
           body: { status: targetStatus },
         });
-        const adMeta = await callMetaApi(ad.metaAdId, { token, params: { fields: 'id,name,status,effective_status' } });
-        ad.status = adMeta.status || targetStatus;
-        ad.effectiveStatus = adMeta.effective_status || targetStatus;
-        adStatusResult = { id: ad.metaAdId, status: ad.status, effectiveStatus: ad.effectiveStatus };
+
+        // PROBLEM 2: "After sending, read the status back from Meta. Only show 'Paused' if Meta confirms it. If Meta returns an error, show the error message on screen in plain words. Never show a pause as done when it failed."
+        const adMeta = await callMetaApi(ad.metaAdId, {
+          token,
+          params: { fields: 'id,name,status,configured_status,effective_status' }
+        });
+
+        const confirmedStatus = adMeta.status || targetStatus;
+        const confirmedConfiguredStatus = adMeta.configured_status || targetStatus;
+        const confirmedEffectiveStatus = adMeta.effective_status || targetStatus;
+
+        if (targetStatus === 'PAUSED' && confirmedStatus !== 'PAUSED' && confirmedConfiguredStatus !== 'PAUSED') {
+          return res.status(400).json({
+            error: `Meta did not confirm pausing the ad. Current status on Meta is ${confirmedStatus} (${confirmedEffectiveStatus}).`,
+          });
+        }
+
+        ad.status = confirmedStatus;
+        ad.configuredStatus = confirmedConfiguredStatus;
+        ad.effectiveStatus = confirmedEffectiveStatus;
+        adStatusResult = {
+          id: ad.metaAdId,
+          status: confirmedStatus,
+          configuredStatus: confirmedConfiguredStatus,
+          effectiveStatus: confirmedEffectiveStatus,
+        };
       } catch (err: any) {
-        return res.status(400).json({ error: `Meta Error: ${err.message}` });
+        console.error('[Meta Toggle Status Error]:', err);
+        const metaErr = err.metaError || {};
+        const cleanMsg = metaErr.error_user_msg || err.message || 'Meta API error';
+        return res.status(400).json({
+          error: `Meta Error setting status to ${targetStatus}: ${cleanMsg}`,
+        });
       }
     } else {
       ad.status = targetStatus;
+      ad.configuredStatus = targetStatus;
       ad.effectiveStatus = targetStatus;
-      adStatusResult = { id: ad.id, status: targetStatus, effectiveStatus: targetStatus };
+      adStatusResult = { id: ad.id, status: targetStatus, configuredStatus: targetStatus, effectiveStatus: targetStatus };
     }
 
     if (firestoreDb) {
@@ -3476,9 +3824,9 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
         adSet: adSetStatusResult,
         ad: adStatusResult,
       },
-      message: campStatusResult
-        ? `Resumed on Meta: Campaign (${campStatusResult.status}), Ad Set (${adSetStatusResult?.status || 'ACTIVE'}), Ad (${ad.status})`
-        : `Ad status updated to ${targetStatus}`,
+      message: targetStatus === 'PAUSED'
+        ? `Paused on Meta (3 Levels PAUSED): Campaign (${campStatusResult?.status || 'PAUSED'}), Ad Set (${adSetStatusResult?.status || 'PAUSED'}), Ad (${ad.status})`
+        : `Resumed on Meta (3 Levels ACTIVE): Campaign (${campStatusResult?.status || 'ACTIVE'}), Ad Set (${adSetStatusResult?.status || 'ACTIVE'}), Ad (${ad.status})`,
     });
   }
 
@@ -3495,7 +3843,7 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
             token,
             body: { status: targetStatus },
           });
-          const asMeta = await callMetaApi(adSet.metaAdSetId, { token, params: { fields: 'id,status,effective_status' } });
+          const asMeta = await callMetaApi(adSet.metaAdSetId, { token, params: { fields: 'id,status,configured_status,effective_status' } });
           adSet.status = asMeta.status || targetStatus;
           adSet.effectiveStatus = asMeta.effective_status || targetStatus;
         } catch (err: any) {
@@ -3522,9 +3870,19 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
         token,
         body: { status: updatedStatus },
       });
-      const campMeta = await callMetaApi(campaign.metaCampaignId, { token, params: { fields: 'id,status,effective_status' } });
+      const campMeta = await callMetaApi(campaign.metaCampaignId, { token, params: { fields: 'id,status,configured_status,effective_status' } });
       campaign.status = campMeta.status || updatedStatus;
       campaign.effectiveStatus = campMeta.effective_status || updatedStatus;
+
+      // Also cascade to adsets and ads on Meta
+      try {
+        const adsetsRes = await callMetaApi(`${campaign.metaCampaignId}/adsets`, { token, params: { fields: 'id' } });
+        if (adsetsRes.data && Array.isArray(adsetsRes.data)) {
+          for (const as of adsetsRes.data) {
+            await callMetaApi(as.id, { method: 'POST', token, body: { status: updatedStatus } }).catch(() => {});
+          }
+        }
+      } catch {}
     } catch (err: any) {
       return res.status(400).json({ error: `Meta Error: ${err.message}` });
     }
@@ -3536,7 +3894,8 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
   store.ads.filter(a => a.campaignId === targetId).forEach(ad => {
     if (ad.status !== 'REJECTED') {
       ad.status = updatedStatus;
-      ad.effectiveStatus = updatedStatus;
+      ad.configuredStatus = updatedStatus;
+      ad.effectiveStatus = updatedStatus === 'PAUSED' ? 'CAMPAIGN_PAUSED' : 'ACTIVE';
     }
   });
 
@@ -3546,6 +3905,143 @@ app.post(['/api/campaigns/:id/toggle', '/api/actions/status'], requireAdmin, asy
 
   persist();
   res.json({ success: true, item: campaign });
+});
+
+// Pause ALL ads in Meta Ad Account (Requirement 2)
+app.post('/api/meta/pause-all-ads', requireAdmin, async (req: Request, res: Response) => {
+  const token = store.metaConfig.token || process.env.META_ACCESS_TOKEN || process.env.META_SYSTEM_USER_TOKEN;
+  const accountId = (req.body.accountId as string) || 'act_25581724204862372';
+
+  if (!token) {
+    return res.status(400).json({ error: 'Meta token not configured. Please paste your token in Meta Settings.' });
+  }
+
+  const paused: Array<{ id: string; name: string; type: string; details?: string }> = [];
+  const failed: Array<{ id: string; name: string; error: string }> = [];
+
+  try {
+    // 1. Fetch all active campaigns from Meta
+    let activeCampaigns: any[] = [];
+    try {
+      const campRes = await callMetaApi(`${accountId}/campaigns`, {
+        token,
+        params: {
+          effective_status: JSON.stringify(['ACTIVE']),
+          fields: 'id,name,status,configured_status,effective_status',
+        },
+      });
+      activeCampaigns = campRes.data || [];
+    } catch (e: any) {
+      // If effective_status filtering fails, fetch all and filter
+      const allCampRes = await callMetaApi(`${accountId}/campaigns`, {
+        token,
+        params: { fields: 'id,name,status,configured_status,effective_status' },
+      });
+      activeCampaigns = (allCampRes.data || []).filter((c: any) => c.status === 'ACTIVE' || c.effective_status === 'ACTIVE');
+    }
+
+    // Also include any local active campaigns with Meta IDs
+    for (const c of store.campaigns) {
+      if (c.status === 'ACTIVE' && c.metaCampaignId && !activeCampaigns.some((ac: any) => ac.id === c.metaCampaignId)) {
+        activeCampaigns.push({
+          id: c.metaCampaignId,
+          name: c.name,
+          status: 'ACTIVE',
+        });
+      }
+    }
+
+    if (activeCampaigns.length === 0) {
+      return res.json({
+        success: true,
+        paused: [],
+        failed: [],
+        message: 'No active campaigns found in account ' + accountId + ' to pause.',
+      });
+    }
+
+    for (const camp of activeCampaigns) {
+      try {
+        // Pause campaign on Meta
+        await callMetaApi(camp.id, {
+          method: 'POST',
+          token,
+          body: { status: 'PAUSED' },
+        });
+
+        // Read back from Meta
+        const readBack = await callMetaApi(camp.id, {
+          token,
+          params: { fields: 'id,status,configured_status,effective_status' },
+        });
+
+        // Also pause ad sets & ads under this campaign
+        try {
+          const adSetsRes = await callMetaApi(`${camp.id}/adsets`, {
+            token,
+            params: { fields: 'id,name,status' },
+          });
+          if (adSetsRes.data && Array.isArray(adSetsRes.data)) {
+            for (const as of adSetsRes.data) {
+              await callMetaApi(as.id, { method: 'POST', token, body: { status: 'PAUSED' } }).catch(() => {});
+            }
+          }
+          const adsRes = await callMetaApi(`${camp.id}/ads`, {
+            token,
+            params: { fields: 'id,name,status' },
+          });
+          if (adsRes.data && Array.isArray(adsRes.data)) {
+            for (const a of adsRes.data) {
+              await callMetaApi(a.id, { method: 'POST', token, body: { status: 'PAUSED' } }).catch(() => {});
+            }
+          }
+        } catch {}
+
+        // Update local store & Firestore
+        const localCamp = store.campaigns.find(c => c.metaCampaignId === camp.id || c.id === camp.id);
+        if (localCamp) {
+          localCamp.status = 'PAUSED';
+          localCamp.effectiveStatus = readBack.effective_status || 'PAUSED';
+          if (firestoreDb) setDoc(doc(firestoreDb, 'campaigns', localCamp.id), localCamp, { merge: true }).catch(() => {});
+        }
+        store.adSets.filter(as => as.campaignId === localCamp?.id || as.metaCampaignId === camp.id).forEach(as => as.status = 'PAUSED');
+        store.ads.filter(a => a.campaignId === localCamp?.id || a.metaCampaignId === camp.id).forEach(a => {
+          a.status = 'PAUSED';
+          a.configuredStatus = 'PAUSED';
+          a.effectiveStatus = 'CAMPAIGN_PAUSED';
+          if (firestoreDb) setDoc(doc(firestoreDb, 'ads', a.id), a, { merge: true }).catch(() => {});
+        });
+
+        paused.push({
+          id: camp.id,
+          name: camp.name || `Campaign ${camp.id}`,
+          type: 'Campaign + AdSets + Ads',
+          details: `Meta confirmed: status=${readBack.status}, effective_status=${readBack.effective_status}`,
+        });
+      } catch (err: any) {
+        failed.push({
+          id: camp.id,
+          name: camp.name || `Campaign ${camp.id}`,
+          error: err.message || 'Meta API error while pausing campaign',
+        });
+      }
+    }
+
+    persist();
+
+    return res.json({
+      success: failed.length === 0,
+      paused,
+      failed,
+      message: `Paused ${paused.length} campaign(s) across ad account ${accountId}. ${failed.length > 0 ? `${failed.length} campaign(s) failed.` : 'All delivery stopped.'}`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: `Failed to pause ads: ${err.message}`,
+      paused,
+      failed,
+    });
+  }
 });
 
 // Update Daily Budget (ADMIN PROTECTED - Requirement 2)
@@ -4513,42 +5009,83 @@ app.get('/api/insights', requireClientOrAdmin, async (req: Request, res: Respons
     let adCpc = 0;
     let adLeadsCount = storeLeadsCount;
     let adInsightsError: string | null = null;
+    let metaStatus = ad.status;
+    let metaConfiguredStatus = ad.configuredStatus || ad.status;
+    let metaEffectiveStatus = ad.effectiveStatus || ad.status;
 
-    if (isLive && token) {
-      if (ad.metaAdId) {
-        try {
-          // Requirement 2: load each ad's own insights from Meta using its Ad ID
-          const adInsightsRes = await callMetaApi(`${ad.metaAdId}/insights`, {
-            token,
-            params: {
-              date_preset: datePreset,
-              fields: 'spend,impressions,clicks,cpc,ctr,inline_link_clicks,cost_per_inline_link_click,actions',
-            },
-          });
+    if (isLive && token && ad.metaAdId && !ad.metaAdId.startsWith('meta_ad_')) {
+      // 1. PROBLEM 1: Read each ad's real status from Meta on every list load / refresh
+      // Request fields status, configured_status and effective_status for the ad, its ad set and its campaign.
+      try {
+        const adMetaStatus = await callMetaApi(ad.metaAdId, {
+          token,
+          params: {
+            fields: 'id,name,status,configured_status,effective_status,adset{id,name,status,configured_status,effective_status},campaign{id,name,status,configured_status,effective_status}',
+          },
+        });
 
-          if (adInsightsRes.data && adInsightsRes.data[0]) {
-            const row = adInsightsRes.data[0];
-            adSpend = Number(row.spend || 0);
-            adImpressions = Number(row.impressions || 0);
-            const linkClicks = row.inline_link_clicks !== undefined
-              ? Number(row.inline_link_clicks || 0)
-              : (row.actions?.find((a: any) => a.action_type === 'link_click')?.value ? Number(row.actions.find((a: any) => a.action_type === 'link_click').value) : Number(row.clicks || 0));
-            adClicks = linkClicks;
-            adCtr = Number(row.ctr || (adImpressions > 0 ? (adClicks / adImpressions) * 100 : 0));
-            adCpc = row.cost_per_inline_link_click !== undefined
-              ? Number(row.cost_per_inline_link_click)
-              : Number(row.cpc || (adClicks > 0 ? adSpend / adClicks : 0));
+        if (adMetaStatus) {
+          metaStatus = adMetaStatus.status || metaStatus;
+          metaConfiguredStatus = adMetaStatus.configured_status || metaConfiguredStatus;
+          metaEffectiveStatus = adMetaStatus.effective_status || metaEffectiveStatus;
 
-            if (row.actions) {
-              const la = row.actions.find((a: any) => a.action_type === 'lead' || a.action_type === 'onsite_conversion.lead_grouped');
-              if (la) adLeadsCount = Number(la.value || 0);
+          // Update ad in local store
+          ad.status = metaStatus;
+          ad.configuredStatus = metaConfiguredStatus;
+          ad.effectiveStatus = metaEffectiveStatus;
+
+          if (adMetaStatus.adset) {
+            const matchedAdSet = store.adSets.find(as => as.id === ad.adSetId || as.metaAdSetId === adMetaStatus.adset.id);
+            if (matchedAdSet) {
+              matchedAdSet.status = adMetaStatus.adset.status || matchedAdSet.status;
+              matchedAdSet.effectiveStatus = adMetaStatus.adset.effective_status || matchedAdSet.effectiveStatus;
             }
           }
-        } catch (err: any) {
-          // Requirement 3: If a Meta insights call fails, show "Couldn't load from Meta" with the error, instead of zeros
-          console.warn(`[Ad Insights Error for ad ${ad.metaAdId}]:`, err.message);
-          adInsightsError = err.message || 'Meta API error';
+
+          if (adMetaStatus.campaign) {
+            const matchedCamp = store.campaigns.find(c => c.id === ad.campaignId || c.metaCampaignId === adMetaStatus.campaign.id);
+            if (matchedCamp) {
+              matchedCamp.status = adMetaStatus.campaign.status || matchedCamp.status;
+              matchedCamp.effectiveStatus = adMetaStatus.campaign.effective_status || matchedCamp.effectiveStatus;
+            }
+          }
         }
+      } catch (stErr: any) {
+        console.warn(`[Ad Live Status Fetch Error for ${ad.metaAdId}]:`, stErr.message);
+      }
+
+      // 2. Load each ad's own insights from Meta using its Ad ID
+      try {
+        const adInsightsRes = await callMetaApi(`${ad.metaAdId}/insights`, {
+          token,
+          params: {
+            date_preset: datePreset,
+            fields: 'spend,impressions,clicks,cpc,ctr,inline_link_clicks,cost_per_inline_link_click,actions',
+          },
+        });
+
+        if (adInsightsRes.data && adInsightsRes.data[0]) {
+          const row = adInsightsRes.data[0];
+          adSpend = Number(row.spend || 0);
+          adImpressions = Number(row.impressions || 0);
+          const linkClicks = row.inline_link_clicks !== undefined
+            ? Number(row.inline_link_clicks || 0)
+            : (row.actions?.find((a: any) => a.action_type === 'link_click')?.value ? Number(row.actions.find((a: any) => a.action_type === 'link_click').value) : Number(row.clicks || 0));
+          adClicks = linkClicks;
+          adCtr = Number(row.ctr || (adImpressions > 0 ? (adClicks / adImpressions) * 100 : 0));
+          adCpc = row.cost_per_inline_link_click !== undefined
+            ? Number(row.cost_per_inline_link_click)
+            : Number(row.cpc || (adClicks > 0 ? adSpend / adClicks : 0));
+
+          if (row.actions) {
+            const la = row.actions.find((a: any) => a.action_type === 'lead' || a.action_type === 'onsite_conversion.lead_grouped');
+            if (la) adLeadsCount = Number(la.value || 0);
+          }
+        }
+      } catch (err: any) {
+        // If a Meta insights call fails, show "Couldn't load from Meta" with the error, instead of zeros
+        console.warn(`[Ad Insights Error for ad ${ad.metaAdId}]:`, err.message);
+        adInsightsError = err.message || 'Meta API error';
       }
     } else if (!isLive) {
       // Demo Mode: provide realistic sample stats for demo
@@ -4571,8 +5108,9 @@ app.get('/api/insights', requireClientOrAdmin, async (req: Request, res: Respons
       adName: ad.name,
       clientName: client?.businessName || 'Client',
       clientId: ad.clientId,
-      status: ad.status,
-      effectiveStatus: ad.effectiveStatus || ad.status,
+      status: metaStatus,
+      configuredStatus: metaConfiguredStatus,
+      effectiveStatus: metaEffectiveStatus,
       goalType: isTraffic ? 'TRAFFIC_WEBSITE' : 'LEAD_GEN',
       rejectionReason: ad.rejectionReason,
       spend: adSpend,

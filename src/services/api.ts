@@ -13,7 +13,8 @@ import {
   AdDetailData,
   GeoLocationSearchResult,
   SpecialAdCategory,
-  AdGoalType
+  AdGoalType,
+  LeadDispatchLog
 } from '../types';
 import { getCurrentIdToken } from './firebase';
 
@@ -611,6 +612,53 @@ export const api = {
       headers,
       body: JSON.stringify({ enabled }),
     });
+    return res.json();
+  },
+
+  // Pause ALL ads across the ad account
+  async pauseAllAds(accountId?: string) {
+    const headers = await getHeaders();
+    const res = await fetch('/api/meta/pause-all-ads', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ accountId }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to pause all ads');
+    }
+    return data as {
+      success: boolean;
+      paused: Array<{ id: string; name: string; type: string }>;
+      failed: Array<{ id: string; name: string; error: string }>;
+      message: string;
+    };
+  },
+
+  // Sync leads from Meta lead forms to GoHighLevel
+  async syncLeadsNow() {
+    const headers = await getHeaders();
+    const res = await fetch('/api/leads/sync-now', {
+      method: 'POST',
+      headers,
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to sync leads from Meta');
+    }
+    return data as {
+      success: boolean;
+      syncedCount: number;
+      message: string;
+      logs: LeadDispatchLog[];
+    };
+  },
+
+  // Get lead dispatch logs
+  async getLeadLogs(): Promise<LeadDispatchLog[]> {
+    const headers = await getHeaders();
+    const res = await fetch('/api/leads/logs', { headers });
+    if (!res.ok) return [];
     return res.json();
   }
 };

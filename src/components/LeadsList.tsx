@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   Send, 
@@ -11,9 +11,12 @@ import {
   ChevronUp, 
   ExternalLink,
   ShieldCheck,
-  Sparkles
+  Sparkles,
+  RefreshCw,
+  AlertCircle,
+  FileSpreadsheet
 } from 'lucide-react';
-import { LeadRecord, Client } from '../types';
+import { LeadRecord, Client, LeadDispatchLog } from '../types';
 import { api } from '../services/api';
 
 interface LeadsListProps {
@@ -31,11 +34,47 @@ export const LeadsList: React.FC<LeadsListProps> = ({
 }) => {
   const [expandedLeadId, setExpandedLeadId] = useState<string | null>(null);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [isSyncingLeads, setIsSyncingLeads] = useState(false);
   const [simulationToast, setSimulationToast] = useState<string | null>(null);
+  const [leadLogs, setLeadLogs] = useState<LeadDispatchLog[]>([]);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(false);
 
   const filteredLeads = selectedClientId && selectedClientId !== 'all'
     ? leads.filter((l) => l.clientId === selectedClientId)
     : leads;
+
+  const loadLeadLogs = async () => {
+    setIsLoadingLogs(true);
+    try {
+      const logs = await api.getLeadLogs();
+      setLeadLogs(logs);
+    } catch (e) {
+      console.warn('Failed to load lead logs:', e);
+    } finally {
+      setIsLoadingLogs(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLeadLogs();
+  }, [selectedClientId]);
+
+  // PROBLEM 3: "Sync leads now" button that pulls all leads from the last 30 days from each form
+  // and creates any that are missing in GoHighLevel, without making duplicates (match on email).
+  const handleSyncLeadsNow = async () => {
+    setIsSyncingLeads(true);
+    setSimulationToast(null);
+    try {
+      const res = await api.syncLeadsNow();
+      setSimulationToast(res.message || `Sync completed. ${res.syncedCount} new lead(s) dispatched to GoHighLevel.`);
+      onRefreshLeads();
+      await loadLeadLogs();
+    } catch (err: any) {
+      alert(`Sync failed: ${err.message}`);
+    } finally {
+      setIsSyncingLeads(false);
+    }
+  };
 
   const handleSimulateNewLead = async () => {
     setIsSimulating(true);
@@ -65,6 +104,7 @@ export const LeadsList: React.FC<LeadsListProps> = ({
 
       setSimulationToast(`New lead arrived! Tagged: "${res.ghlTag}" and sent SMS alert to ${targetClient.alertPhone || targetClient.contactPhone || '(810) 510-3406'}`);
       onRefreshLeads();
+      await loadLeadLogs();
     } catch (err: any) {
       alert('Simulation error: ' + err.message);
     } finally {
@@ -89,14 +129,27 @@ export const LeadsList: React.FC<LeadsListProps> = ({
           </p>
         </div>
 
-        <button
-          onClick={handleSimulateNewLead}
-          disabled={isSimulating}
-          className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
-        >
-          <Send className={`w-3.5 h-3.5 ${isSimulating ? 'animate-spin' : ''}`} />
-          <span>{isSimulating ? 'Simulating Lead...' : 'Trigger Test Lead'}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {/* PROBLEM 3: "Sync leads now" button that pulls all leads from the last 30 days from each form */}
+          <button
+            onClick={handleSyncLeadsNow}
+            disabled={isSyncingLeads}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Pull all leads from the last 30 days from each Meta lead form and create missing contacts in GoHighLevel"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isSyncingLeads ? 'animate-spin' : ''}`} />
+            <span>{isSyncingLeads ? 'Syncing from Meta...' : 'Sync leads now'}</span>
+          </button>
+
+          <button
+            onClick={handleSimulateNewLead}
+            disabled={isSimulating}
+            className="bg-amber-600 hover:bg-amber-700 text-white px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+          >
+            <Send className={`w-3.5 h-3.5 ${isSimulating ? 'animate-spin' : ''}`} />
+            <span>{isSimulating ? 'Simulating Lead...' : 'Trigger Test Lead'}</span>
+          </button>
+        </div>
       </div>
 
       {simulationToast && (
@@ -234,6 +287,123 @@ export const LeadsList: React.FC<LeadsListProps> = ({
             No leads recorded yet for this client filter. Click "Trigger Test Lead" above to simulate an incoming inquiry.
           </div>
         )}
+      </div>
+
+      {/* PROBLEM 3: Small Log on the Leads & GHL Page (lead name, form, time received from Meta, and whether it was sent to GHL successfully or the error message if not) */}
+      <div className="mt-8 pt-6 border-t border-slate-200">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+          <div>
+            <h4 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+              <span>Meta Lead Forms & GoHighLevel Sync Log</span>
+            </h4>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Live status of leads retrieved from Meta lead forms and dispatched to GoHighLevel sub-accounts with assigned tags.
+            </p>
+          </div>
+          <button
+            onClick={loadLeadLogs}
+            disabled={isLoadingLogs}
+            className="text-slate-600 hover:text-slate-900 text-xs font-medium flex items-center gap-1 cursor-pointer px-2 py-1 rounded hover:bg-slate-100 transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${isLoadingLogs ? 'animate-spin' : ''}`} />
+            <span>Refresh Log</span>
+          </button>
+        </div>
+
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-slate-50/50">
+          <table className="w-full text-left text-xs text-slate-600">
+            <thead className="bg-slate-100 text-slate-500 font-semibold uppercase text-[10px] tracking-wider border-b border-slate-200">
+              <tr>
+                <th className="py-2.5 px-3">Lead Name</th>
+                <th className="py-2.5 px-3">Form</th>
+                <th className="py-2.5 px-3">Time Received (Meta)</th>
+                <th className="py-2.5 px-3">Sub-Account & Tag</th>
+                <th className="py-2.5 px-3">GoHighLevel Delivery Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-200 bg-white">
+              {leadLogs.map((log) => (
+                <tr key={log.id} className="hover:bg-slate-50 transition-colors">
+                  {/* Lead Name */}
+                  <td className="py-2.5 px-3">
+                    <div className="font-semibold text-slate-900">
+                      {log.leadName}
+                    </div>
+                    {log.email && (
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        {log.email}
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Form Name */}
+                  <td className="py-2.5 px-3">
+                    <span className="font-medium text-slate-800">
+                      {log.formName}
+                    </span>
+                    {log.formId && (
+                      <div className="text-[10px] text-slate-400 font-mono">
+                        ID: {log.formId}
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Time Received from Meta */}
+                  <td className="py-2.5 px-3 whitespace-nowrap text-slate-600">
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      <span>{log.receivedAt ? new Date(log.receivedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'N/A'}</span>
+                    </div>
+                    <div className="text-[10px] text-slate-400">
+                      {log.receivedAt ? new Date(log.receivedAt).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
+                    </div>
+                  </td>
+
+                  {/* Sub-Account & Tag */}
+                  <td className="py-2.5 px-3">
+                    <div className="font-medium text-slate-800">
+                      {log.ghlSubAccountName || 'Default Sub-Account'}
+                    </div>
+                    {log.tag && (
+                      <span className="inline-block mt-0.5 bg-amber-50 text-amber-900 border border-amber-200 px-1.5 py-0.2 rounded font-mono text-[10px]">
+                        {log.tag}
+                      </span>
+                    )}
+                  </td>
+
+                  {/* GHL Status or Plain Error */}
+                  <td className="py-2.5 px-3">
+                    {log.status === 'success' ? (
+                      <div className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+                        <span>Sent to GoHighLevel</span>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-start gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium bg-red-50 text-red-800 border border-red-200 max-w-sm">
+                        <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-bold text-red-900">Delivery Error</div>
+                          <div className="text-[10px] text-red-700 leading-tight">
+                            {log.errorMessage || 'Failed to dispatch to GoHighLevel'}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              ))}
+
+              {leadLogs.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="py-6 text-center text-slate-400 text-xs">
+                    No lead sync actions recorded yet. Click "Sync leads now" above to query Meta lead forms.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
