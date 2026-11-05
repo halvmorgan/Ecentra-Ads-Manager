@@ -1372,6 +1372,98 @@ const KNOWN_META_LEAD_FORMS = [
   },
 ];
 
+// Helper to map lead form IDs and names to exact required GoHighLevel tags
+function getTagForFormOrAd(formId: string, formName?: string, adName?: string): string {
+  const fId = String(formId || '');
+  const combined = `${formName || ''} ${adName || ''}`.toLowerCase();
+  if (fId === '1111136241824188' || combined.includes('hvw') || combined.includes('zillow') || combined.includes('appraisal')) {
+    return 'hvw checklist';
+  }
+  if (fId === '1574634711099580' || combined.includes('afc') || combined.includes('foster') || combined.includes('licensing')) {
+    return 'afc checklist';
+  }
+  if (fId === '2021054135269484' || combined.includes('5 mistake') || combined.includes('five mistake') || combined.includes('mistakes')) {
+    return 'llc 5 mistakes';
+  }
+  if (fId === '1872920157034934' || combined.includes('llc') || combined.includes('setup')) {
+    return 'llc checklist';
+  }
+  return `FB Ad – ${adName || formName || 'Lead'}`;
+}
+
+// Helper to guarantee every lead form ad has its Instant Form ID read from Meta creative and saved
+async function ensureAllLeadFormAdsSyncedFromMeta(): Promise<void> {
+  const token = store.metaConfig.token || process.env.META_ACCESS_TOKEN || process.env.META_SYSTEM_USER_TOKEN;
+  await getAdsFromDb();
+
+  // Explicit mappings for the 4 target lead form ads
+  const targetLeadFormMap: Record<string, { formId: string; name: string; tag: string }> = {
+    '120256788935970309': { formId: '1111136241824188', name: 'HVW Zillow Checklist - Lead Form v1', tag: 'hvw checklist' },
+    '120256789441400309': { formId: '1574634711099580', name: 'AFC Licensing Checklist - Lead Form v1', tag: 'afc checklist' },
+    '120256790440580309': { formId: '1872920157034934', name: 'LLC Setup Checklist - Lead Form v1', tag: 'llc checklist' },
+    '120256790827100309': { formId: '2021054135269484', name: 'LLC 5 Mistakes - Lead Form v1', tag: 'llc 5 mistakes' },
+  };
+
+  let changed = false;
+  for (const ad of store.ads) {
+    const isTarget = targetLeadFormMap[ad.metaAdId] || targetLeadFormMap[ad.id?.replace(/^ad-meta-/, '')];
+    if (isTarget) {
+      if (!ad.formId || ad.formId === 'N/A') {
+        ad.formId = isTarget.formId;
+        if (firestoreDb) {
+          setDoc(doc(firestoreDb, 'ads', ad.id), { formId: isTarget.formId }, { merge: true }).catch(() => {});
+        }
+        changed = true;
+      }
+    }
+
+    // If still missing formId and has Meta creative/ad ID, query Meta
+    if ((!ad.formId || ad.formId === 'N/A') && (ad.metaCreativeId || ad.metaAdId) && token) {
+      try {
+        let crData: any = null;
+        if (ad.metaCreativeId && !ad.metaCreativeId.startsWith('meta_cr_')) {
+          crData = await callMetaApi(ad.metaCreativeId, {
+            token,
+            params: { fields: 'id,name,object_story_spec' },
+          });
+        }
+        if (!crData && ad.metaAdId && !ad.metaAdId.startsWith('meta_ad_')) {
+          const adMeta = await callMetaApi(ad.metaAdId, {
+            token,
+            params: { fields: 'id,name,creative{id,name,object_story_spec}' },
+          });
+          crData = adMeta.creative;
+        }
+
+        const metaFormId = crData?.object_story_spec?.link_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.object_story_spec?.template_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.object_story_spec?.video_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.lead_gen_form_id;
+
+        if (metaFormId) {
+          ad.formId = String(metaFormId);
+          if (crData?.id && !ad.metaCreativeId) {
+            ad.metaCreativeId = crData.id;
+          }
+          if (firestoreDb) {
+            setDoc(doc(firestoreDb, 'ads', ad.id), {
+              formId: ad.formId,
+              metaCreativeId: ad.metaCreativeId,
+            }, { merge: true }).catch(() => {});
+          }
+          changed = true;
+        }
+      } catch (e: any) {
+        console.warn(`[Ensure Form ID Error for ad ${ad.id}]:`, e.message);
+      }
+    }
+  }
+
+  if (changed) {
+    persist();
+  }
+}
+
 // Background Lead Sync (every 15 minutes or via Sync Leads Now button)
 async function syncAllLiveLeads(): Promise<{
   syncedCount: number;
@@ -1387,6 +1479,9 @@ async function syncAllLiveLeads(): Promise<{
       logs: store.leadDispatchLogs || [],
     };
   }
+
+  // Ensure all lead form ads have their Instant Form ID read from Meta creative and saved
+  await ensureAllLeadFormAdsSyncedFromMeta();
 
   const token = store.metaConfig.token;
   const clients = await getClientsFromDb();
@@ -1411,11 +1506,16 @@ async function syncAllLiveLeads(): Promise<{
   for (const ad of store.ads) {
     if (ad.formId && !formsToCheck.some(f => f.formId === ad.formId)) {
       const client = clients.find(c => c.id === ad.clientId);
+      const tag = getTagForFormOrAd(ad.formId, ad.formName, ad.name);
+      const subAccountName = tag === 'hvw checklist'
+        ? 'Ecentury Appraisal Services'
+        : (client?.businessName || 'Ecentra Concierge');
+
       formsToCheck.push({
         formId: ad.formId,
         formName: ad.formName || `Lead Form for ${ad.name}`,
-        subAccountName: client?.businessName || 'Ecentra Concierge',
-        tag: `FB Ad – ${ad.name}`,
+        subAccountName,
+        tag,
         clientId: ad.clientId,
         adId: ad.id,
         adName: ad.name,
@@ -2534,6 +2634,11 @@ async function syncClientFromMetaCore(clientOrId: any): Promise<{ recoveredAds: 
     let imageUrl = cr.image_url || cr.thumbnail_url || linkData.picture || '';
     let callToAction = cr.call_to_action_type || linkData.call_to_action?.type || '';
     let websiteUrl = linkData.link || '';
+    let formId = cr.object_story_spec?.link_data?.call_to_action?.value?.lead_gen_form_id ||
+                 cr.object_story_spec?.template_data?.call_to_action?.value?.lead_gen_form_id ||
+                 cr.object_story_spec?.video_data?.call_to_action?.value?.lead_gen_form_id ||
+                 cr.lead_gen_form_id ||
+                 '';
     let crPageId = String(
       cr.object_story_spec?.page_id ||
       cr.actor_id ||
@@ -2541,7 +2646,7 @@ async function syncClientFromMetaCore(clientOrId: any): Promise<{ recoveredAds: 
     ).trim();
 
     // If creative details are missing and cr.id is present, fetch creative directly from Meta API
-    if (token && cr.id && (!headline || !primaryText || !crPageId || !websiteUrl)) {
+    if (token && cr.id && (!headline || !primaryText || !crPageId || !websiteUrl || !formId)) {
       try {
         const fullCreative = await callMetaApi(cr.id, {
           token,
@@ -2555,6 +2660,7 @@ async function syncClientFromMetaCore(clientOrId: any): Promise<{ recoveredAds: 
           imageUrl = imageUrl || fullCreative.image_url || fullCreative.thumbnail_url || spec.picture || '';
           callToAction = callToAction || fullCreative.call_to_action_type || spec.call_to_action?.type || '';
           websiteUrl = websiteUrl || spec.link || '';
+          formId = formId || spec.call_to_action?.value?.lead_gen_form_id || fullCreative.object_story_spec?.template_data?.call_to_action?.value?.lead_gen_form_id || fullCreative.lead_gen_form_id || '';
           crPageId = crPageId || String(
             fullCreative.object_story_spec?.page_id ||
             fullCreative.actor_id ||
@@ -2722,6 +2828,7 @@ async function syncClientFromMetaCore(clientOrId: any): Promise<{ recoveredAds: 
       existing.metaAdSetId = a.adset_id || existing.metaAdSetId;
       existing.metaAdId = a.id;
       if (cr.id) existing.metaCreativeId = cr.id;
+      if (formId) existing.formId = String(formId);
       existing.clientId = client.id;
       if (crPageId) existing.pageId = crPageId;
       if (clientPageName) existing.pageName = clientPageName;
@@ -2758,6 +2865,7 @@ async function syncClientFromMetaCore(clientOrId: any): Promise<{ recoveredAds: 
         metaCampaignId: a.campaign_id,
         metaAdSetId: a.adset_id,
         metaAdId: a.id,
+        formId: formId ? String(formId) : undefined,
         pageId: crPageId || clientPageId,
         pageName: clientPageName,
       };
@@ -4260,7 +4368,11 @@ app.delete('/api/ads/:id', requireAdmin, async (req: Request, res: Response) => 
 // Ad Detail (Client isolated: only view own client's ad)
 app.get('/api/ads/:id', requireClientOrAdmin, async (req: Request, res: Response) => {
   const { id } = req.params;
-  const ad = store.ads.find(a => a.id === id);
+  let ad = store.ads.find(a => a.id === id || a.metaAdId === id);
+  if (!ad) {
+    await getAdsFromDb();
+    ad = store.ads.find(a => a.id === id || a.metaAdId === id);
+  }
   if (!ad) return res.status(404).json({ error: 'Ad not found' });
 
   if ((req as any).isClient && (req as any).clientId !== ad.clientId) {
@@ -4274,6 +4386,49 @@ app.get('/api/ads/:id', requireClientOrAdmin, async (req: Request, res: Response
 
   const isLive = store.metaConfig.liveMode && Boolean(store.metaConfig.token);
   const token = store.metaConfig.token;
+
+  // Read the Instant Form ID from Meta: get the ad's creative and take object_story_spec.link_data.call_to_action.value.lead_gen_form_id
+  if (isLive && token && (ad.metaAdId || ad.metaCreativeId)) {
+    if (!ad.formId || ad.formId === 'N/A' || ad.goalType !== 'TRAFFIC_WEBSITE') {
+      try {
+        let crData: any = null;
+        if (ad.metaCreativeId && !ad.metaCreativeId.startsWith('meta_cr_')) {
+          crData = await callMetaApi(ad.metaCreativeId, {
+            token,
+            params: { fields: 'id,name,object_story_spec' },
+          });
+        }
+        if (!crData && ad.metaAdId && !ad.metaAdId.startsWith('meta_ad_')) {
+          const adMeta = await callMetaApi(ad.metaAdId, {
+            token,
+            params: { fields: 'id,name,creative{id,name,object_story_spec}' },
+          });
+          crData = adMeta.creative;
+        }
+
+        const metaFormId = crData?.object_story_spec?.link_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.object_story_spec?.template_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.object_story_spec?.video_data?.call_to_action?.value?.lead_gen_form_id ||
+                           crData?.lead_gen_form_id;
+
+        if (metaFormId) {
+          ad.formId = String(metaFormId);
+          if (crData?.id && !ad.metaCreativeId) {
+            ad.metaCreativeId = crData.id;
+          }
+          if (firestoreDb) {
+            setDoc(doc(firestoreDb, 'ads', ad.id), {
+              formId: ad.formId,
+              metaCreativeId: ad.metaCreativeId,
+            }, { merge: true }).catch(() => {});
+          }
+          persist();
+        }
+      } catch (crErr: any) {
+        console.warn(`[Ad Detail Form ID Fetch Warning for ad ${ad.id}]:`, crErr.message);
+      }
+    }
+  }
 
   let previewHtml: string | undefined = undefined;
   if (isLive && ad.metaCreativeId) {
@@ -5819,6 +5974,7 @@ async function startServer() {
 
   // Hydrate memory cache from Cloud Firestore
   await syncFromFirestore();
+  await ensureAllLeadFormAdsSyncedFromMeta().catch(() => {});
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer } = await import('vite');
